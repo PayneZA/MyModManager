@@ -1,0 +1,26 @@
+[
+  {
+    "Author": "Nao",
+    "Name": "My Mod Manager",
+    "InternalName": "MyModManager",
+    "AssemblyVersion": "1.0.0.1",
+    "Description": "A unofficial standalone mod manager for Penumbra. Toggle mods and options quickly via shortcuts and a favorite list.",
+    "Punchline": "Bookmark and toggle Penumbra mods and options via shortcuts.",
+    "ApplicableTarget": "FFXIV",
+    "Tags": [
+      "utility",
+      "penumbra",
+      "mods"
+    ],
+    "DalamudApiLevel": 15,
+    "DownloadLinkInstall": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
+    "DownloadLinkUpdate": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
+    "DownloadLinkTesting": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
+    "LoadRequiredState": 0,
+    "LoadSync": false,
+    "CanUnloadAsync": true,
+    "SupportsConfig": true,
+    "IconUrl": "http://gitea.naonao.dev/NaoAdmin/MyModManager/src/branch/main/main/icon.png",
+    "RepoUrl": "http://gitea.naonao.dev/NaoAdmin/MyModManager"
+  }
+]

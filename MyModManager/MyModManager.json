@@ -1,0 +1,19 @@
+{
+  "Author": "Nao",
+  "Name": "My Mod Manager",
+  "Punchline": "Bookmark and toggle Penumbra mods and options via shortcuts.",
+  "InternalName": "MyModManager",
+  "AssemblyVersion": "1.0.0.1",
+  "Description": "A unofficial standalone mod manager for Penumbra. Toggle mods and options quickly via shortcuts and a favorite list.",
+  "ApplicableTarget": "FFXIV",
+  "Tags": [
+    "utility",
+    "penumbra",
+    "mods"
+  ],
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": true,
+  "SupportsConfig": true
+}

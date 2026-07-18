@@ -1,0 +1,116 @@
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.dll
+*.pdb
+*.cache
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages.lock.json
+
+# ---------------------------------------------------------------------------
+# Visual Studio
+# ---------------------------------------------------------------------------
+.vs/
+*.vsp
+*.vspx
+*.sap
+*.VisualState.xml
+*.psess
+*.vsp
+*.vspx
+
+# ---------------------------------------------------------------------------
+# Visual Studio Code
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.history/
+
+# ---------------------------------------------------------------------------
+# Rider / JetBrains
+# ---------------------------------------------------------------------------
+.idea/
+*.sln.iml
+
+# ---------------------------------------------------------------------------
+# AI agents / assistants
+# ---------------------------------------------------------------------------
+# Claude Code
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.claude.json
+
+# Cursor
+.cursor/
+.cursorrules
+.cursorignore
+
+# GitHub Copilot
+.github/copilot-instructions.md
+
+# Aider
+.aider*
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v*/
+
+# Windsurf / Codeium
+.windsurf/
+.codeium/
+
+# Continue
+.continue/
+
+# Cline / Roo
+.clinerules/
+.roo/
+
+# Gemini CLI / Google
+.gemini/
+
+# OpenAI Codex
+.codex/
+
+# Generic AI agent scratch / context dirs
+.ai/
+.agent/
+.agents/
+
+# ---------------------------------------------------------------------------
+# OS files
+# ---------------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# ---------------------------------------------------------------------------
+# Misc
+# ---------------------------------------------------------------------------
+*.tmp
+*.bak
+*.swp
+*~
