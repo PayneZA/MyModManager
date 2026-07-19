@@ -11,7 +11,6 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using MyModManager.Models;
-using ECommons.Automation;
 
 namespace MyModManager.Windows;
 
@@ -30,6 +29,9 @@ public class MainWindow : Window, IDisposable
     }
 
     public void Dispose() { }
+
+    /// <summary>Forces the next Draw to re-poll Penumbra state (e.g. after a chat-command toggle).</summary>
+    public void ForceStateRefresh() => lastModStateRefresh = DateTime.MinValue;
 
     public override void Draw()
     {
@@ -98,6 +100,16 @@ public class MainWindow : Window, IDisposable
         using (var child = ImRaii.Child("FavoriteModsScroll", Vector2.Zero, true))
         {
             if (!child.Success) return;
+
+            if (plugin.Configuration.ManagedMods.Count == 0)
+            {
+                ImGui.TextWrapped("No favorites yet.");
+                ImGui.TextWrapped("Click 'Manage' above (or use /mmm manage) to bookmark Penumbra mods and options.");
+            }
+            else if (!query.Any())
+            {
+                ImGui.TextDisabled("No favorites match your search.");
+            }
 
             foreach (var categoryGroup in groupedByCategory)
             {
@@ -170,9 +182,11 @@ public class MainWindow : Window, IDisposable
             bool redrawNeeded = false;
             foreach (var m in modsToToggle)
             {
-                m.IsEnabled = targetState;
+                // Only persist the new state when Penumbra accepted the change, so the
+                // stored fallback state stays truthful when the IPC call fails.
                 if (plugin.PenumbraOptionSetter.SetManagedModState(m, targetState, plugin.Configuration.TargetCollectionId))
                 {
+                    m.IsEnabled = targetState;
                     redrawNeeded = true;
                 }
             }
@@ -181,9 +195,14 @@ public class MainWindow : Window, IDisposable
 
             if (redrawNeeded)
             {
-                new Penumbra.Api.IpcSubscribers.RedrawObject(plugin.Interface).Invoke(0, RedrawType.Redraw);
+                plugin.PenumbraOptionSetter.RedrawPlayer();
                 lastModStateRefresh = DateTime.MinValue; // Force refresh
             }
+        }
+
+        if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single)
+        {
+            ImGui.SetTooltip("Single-select option: ticking selects it in Penumbra.\nIt cannot be unticked - enable a different option from the same group instead.");
         }
 
         if (mod.IsAnimation)
@@ -205,9 +224,9 @@ public class MainWindow : Window, IDisposable
                     bool redrawNeeded = false;
                     foreach (var m in modsToToggle)
                     {
-                        m.IsEnabled = true;
                         if (plugin.PenumbraOptionSetter.SetManagedModState(m, true, plugin.Configuration.TargetCollectionId))
                         {
+                            m.IsEnabled = true;
                             redrawNeeded = true;
                         }
                     }
@@ -215,14 +234,14 @@ public class MainWindow : Window, IDisposable
                     plugin.Configuration.Save();
                     if (redrawNeeded)
                     {
-                        new Penumbra.Api.IpcSubscribers.RedrawObject(plugin.Interface).Invoke(0, RedrawType.Redraw);
+                        plugin.PenumbraOptionSetter.RedrawPlayer();
                         lastModStateRefresh = DateTime.MinValue;
                     }
                 }
-                
+
                 if (!string.IsNullOrWhiteSpace(mod.AnimationCommand))
                 {
-                    Chat.SendMessage(mod.AnimationCommand);
+                    plugin.SendAnimationCommand(mod.AnimationCommand);
                 }
             }
             if (ImGui.IsItemHovered())

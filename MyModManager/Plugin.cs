@@ -3,6 +3,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
+using ECommons.Automation;
 using ECommons.DalamudServices;
 using MyModManager.Helpers;
 using MyModManager.Windows;
@@ -73,7 +74,7 @@ public class Plugin : IDalamudPlugin
             return;
         }
 
-        var action = argList[0].ToLower();
+        var action = argList[0].ToLowerInvariant();
 
         if (action == "manage")
         {
@@ -81,42 +82,78 @@ public class Plugin : IDalamudPlugin
             return;
         }
 
-        if (argList.Length >= 2)
+        if ((action == "on" || action == "off" || action == "toggle") && argList.Length >= 2)
         {
             var shortcutName = string.Join(" ", argList.Skip(1));
 
-            var mod = Configuration.ManagedMods.FirstOrDefault(m => m.ShortcutName.Equals(shortcutName, StringComparison.OrdinalIgnoreCase));
-            if (mod != null)
-            {
-                bool enable = action switch
-                {
-                    "on" => true,
-                    "off" => false,
-                    "toggle" => !mod.IsEnabled,
-                    _ => true
-                };
+            // Mods sharing a shortcut name toggle together, matching the UI checkbox behavior.
+            var mods = Configuration.ManagedMods
+                .Where(m => m.ShortcutName.Equals(shortcutName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
+            if (mods.Count == 0)
+            {
+                Svc.Chat.Print($"[MMM] Unknown shortcut: {shortcutName}");
+                return;
+            }
+
+            // "toggle" flips the live Penumbra state so it stays correct even after the
+            // user changed the mod in Penumbra directly; stored state is the fallback.
+            bool enable = action switch
+            {
+                "on" => true,
+                "off" => false,
+                _ => !(PenumbraOptionSetter.GetManagedModState(mods[0], Configuration.TargetCollectionId) ?? mods[0].IsEnabled)
+            };
+
+            if (!enable && mods.All(m => !string.IsNullOrEmpty(m.OptionName) && m.GroupType == GroupType.Single))
+            {
+                Svc.Chat.Print($"[MMM] '{shortcutName}' points at single-select option(s), which cannot be disabled - enable a different option from the group instead.");
+                return;
+            }
+
+            int succeeded = 0;
+            foreach (var mod in mods)
+            {
                 if (PenumbraOptionSetter.SetManagedModState(mod, enable, Configuration.TargetCollectionId))
                 {
                     mod.IsEnabled = enable;
-                    Configuration.Save();
-                    new Penumbra.Api.IpcSubscribers.RedrawObject(Interface).Invoke(0, RedrawType.Redraw);
-                    Svc.Chat.Print($"[PMM] {mod.DisplayName} set to {(enable ? "Enabled" : "Disabled")}");
+                    succeeded++;
                 }
-                else
-                {
-                    Svc.Chat.Print($"[PMM] Failed to toggle mod via shortcut: {shortcutName}");
-                }
-                return;
+            }
+
+            if (succeeded > 0)
+            {
+                Configuration.Save();
+                PenumbraOptionSetter.RedrawPlayer();
+                MainWindow.ForceStateRefresh();
+                ModManagerWindow.ForceStateRefresh();
+
+                var label = mods.Count == 1
+                    ? mods[0].DisplayName
+                    : $"{shortcutName} ({succeeded}/{mods.Count} entries)";
+                Svc.Chat.Print($"[MMM] {label} set to {(enable ? "Enabled" : "Disabled")}");
             }
             else
             {
-                Svc.Chat.Print($"[PMM] Unknown shortcut: {shortcutName}");
-                return;
+                Svc.Chat.Print($"[MMM] Failed to toggle shortcut '{shortcutName}'. Is Penumbra running and the mod installed?");
             }
+            return;
         }
-        
-        Svc.Chat.Print("[PMM] Usage: /pmm | /pmm manage | /pmm [on|off|toggle] <shortcut>");
+
+        Svc.Chat.Print("[MMM] Usage: /mmm | /mmm manage | /mmm [on|off|toggle] <shortcut>");
+    }
+
+    /// <summary>
+    /// Sends an emote/animation chat command. A leading '/' is enforced so a typo like
+    /// "dance" can never be posted to public chat as a plain message.
+    /// </summary>
+    public void SendAnimationCommand(string animationCommand)
+    {
+        var cmd = animationCommand.Trim();
+        if (cmd.Length == 0) return;
+        if (!cmd.StartsWith('/')) cmd = "/" + cmd;
+        Chat.SendMessage(cmd);
     }
 
     private void ToggleConfigUi() => ModManagerWindow.IsOpen = !ModManagerWindow.IsOpen;

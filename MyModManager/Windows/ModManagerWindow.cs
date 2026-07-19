@@ -11,7 +11,6 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using MyModManager.Models;
-using ECommons.Automation;
 
 namespace MyModManager.Windows;
 
@@ -51,6 +50,9 @@ public class ModManagerWindow : Window, IDisposable
     }
 
     public void Dispose() { }
+
+    /// <summary>Forces the next Draw to re-poll Penumbra state (e.g. after a chat-command toggle).</summary>
+    public void ForceStateRefresh() => lastModStateRefresh = DateTime.MinValue;
 
     public override void Draw()
     {
@@ -198,6 +200,8 @@ public class ModManagerWindow : Window, IDisposable
         {
             var filteredMods = penumbraMods
                 .Where(m => m.Value.Contains(modSearchText, StringComparison.OrdinalIgnoreCase) || m.Key.Contains(modSearchText, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(m => m.Value.StartsWith(modSearchText, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(m => m.Value, StringComparer.OrdinalIgnoreCase)
                 .Take(10);
 
             if (filteredMods.Any())
@@ -205,7 +209,12 @@ public class ModManagerWindow : Window, IDisposable
                 ImGui.Indent();
                 foreach (var mod in filteredMods)
                 {
-                    if (ImGui.Selectable($"{mod.Value} (##{mod.Key})"))
+                    // Show the directory name when it differs from the display name so
+                    // identically-named mods can be told apart.
+                    var label = mod.Key.Equals(mod.Value, StringComparison.Ordinal)
+                        ? mod.Value
+                        : $"{mod.Value} ({mod.Key})";
+                    if (ImGui.Selectable($"{label}##{mod.Key}"))
                     {
                         modSearchText = mod.Key;
                         newModDisplayName = mod.Value;
@@ -316,7 +325,18 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.TextColored(ImGuiColors.DalamudYellow, "Select a specific option, or set the group back to '(None - Toggle whole mod)'.");
         }
 
-        using (ImRaii.Disabled(groupWithoutOption))
+        bool noModSelected = string.IsNullOrWhiteSpace(modSearchText);
+
+        // Free-typed text that isn't a real Penumbra directory would create a favorite
+        // that can never toggle anything. Only enforced when adding and the mod list is
+        // available; editing stays allowed so bindings to uninstalled mods survive.
+        bool unknownMod = !isEditing && !noModSelected && penumbraMods.Count > 0 && !penumbraMods.ContainsKey(modSearchText);
+        if (unknownMod)
+        {
+            ImGui.TextColored(ImGuiColors.DalamudYellow, "Pick a mod from the search results above - this text is not a Penumbra mod directory.");
+        }
+
+        using (ImRaii.Disabled(groupWithoutOption || noModSelected || unknownMod))
         {
             if (ImGui.Button(isEditing ? "Save Changes" : "Add to Favorites") && !string.IsNullOrWhiteSpace(modSearchText))
             {
@@ -346,7 +366,12 @@ public class ModManagerWindow : Window, IDisposable
                     plugin.Configuration.Save();
                 }
 
+                var categoryToKeep = target?.CategoryName ?? "Default";
                 ResetModForm();
+                // Keep the category between adds so several mods can be filed into the
+                // same category without retyping it each time.
+                if (!isEditing)
+                    newModCategoryName = categoryToKeep;
             }
         }
 
@@ -415,6 +440,15 @@ public class ModManagerWindow : Window, IDisposable
         using (var child = ImRaii.Child("FavoriteModsScroll", Vector2.Zero, true))
         {
             if (!child.Success) return;
+
+            if (plugin.Configuration.ManagedMods.Count == 0)
+            {
+                ImGui.TextWrapped("No favorites yet. Use the form above to bookmark a Penumbra mod or one of its options.");
+            }
+            else if (!query.Any())
+            {
+                ImGui.TextDisabled("No favorites match your search.");
+            }
 
             foreach (var categoryGroup in groupedByCategory)
             {
@@ -493,9 +527,11 @@ public class ModManagerWindow : Window, IDisposable
             bool redrawNeeded = false;
             foreach (var m in modsToToggle)
             {
-                m.IsEnabled = targetState;
+                // Only persist the new state when Penumbra accepted the change, so the
+                // stored fallback state stays truthful when the IPC call fails.
                 if (plugin.PenumbraOptionSetter.SetManagedModState(m, targetState, plugin.Configuration.TargetCollectionId))
                 {
+                    m.IsEnabled = targetState;
                     redrawNeeded = true;
                 }
             }
@@ -504,9 +540,14 @@ public class ModManagerWindow : Window, IDisposable
 
             if (redrawNeeded)
             {
-                new Penumbra.Api.IpcSubscribers.RedrawObject(plugin.Interface).Invoke(0, RedrawType.Redraw);
+                plugin.PenumbraOptionSetter.RedrawPlayer();
                 lastModStateRefresh = DateTime.MinValue; // Force refresh
             }
+        }
+
+        if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single)
+        {
+            ImGui.SetTooltip("Single-select option: ticking selects it in Penumbra.\nIt cannot be unticked - enable a different option from the same group instead.");
         }
 
         if (mod.IsAnimation)
@@ -528,9 +569,9 @@ public class ModManagerWindow : Window, IDisposable
                     bool redrawNeeded = false;
                     foreach (var m in modsToToggle)
                     {
-                        m.IsEnabled = true;
                         if (plugin.PenumbraOptionSetter.SetManagedModState(m, true, plugin.Configuration.TargetCollectionId))
                         {
+                            m.IsEnabled = true;
                             redrawNeeded = true;
                         }
                     }
@@ -538,14 +579,14 @@ public class ModManagerWindow : Window, IDisposable
                     plugin.Configuration.Save();
                     if (redrawNeeded)
                     {
-                        new Penumbra.Api.IpcSubscribers.RedrawObject(plugin.Interface).Invoke(0, RedrawType.Redraw);
+                        plugin.PenumbraOptionSetter.RedrawPlayer();
                         lastModStateRefresh = DateTime.MinValue;
                     }
                 }
-                
+
                 if (!string.IsNullOrWhiteSpace(mod.AnimationCommand))
                 {
-                    Chat.SendMessage(mod.AnimationCommand);
+                    plugin.SendAnimationCommand(mod.AnimationCommand);
                 }
             }
             if (ImGui.IsItemHovered())

@@ -34,6 +34,51 @@ public class PenumbraOptionSetter
         _redrawObject = new RedrawObject(pi);
     }
 
+    /// <summary>
+    /// Reads the live enabled state of a managed mod (or its specific option) from Penumbra.
+    /// Returns null when Penumbra or the mod is unavailable so callers can fall back to stored state.
+    /// </summary>
+    public bool? GetManagedModState(ManagedMod mod, Guid collectionId = default)
+    {
+        try
+        {
+            if (collectionId == Guid.Empty)
+            {
+                (collectionId, _) = _getCollection.Invoke(ApiCollectionType.Current) ?? (Guid.Empty, string.Empty);
+            }
+
+            if (collectionId == Guid.Empty) return null;
+
+            var current = _getCurrentModSettings.Invoke(collectionId, mod.ModName, mod.ModName, false);
+            if (current.Item1 != PenumbraApiEc.Success || current.Item2 == null) return null;
+
+            if (!string.IsNullOrEmpty(mod.OptionName))
+            {
+                return current.Item2.Value.Item3.TryGetValue(mod.GroupName, out var list) && list.Contains(mod.OptionName);
+            }
+
+            return current.Item2.Value.Item1;
+        }
+        catch (Exception ex)
+        {
+            Svc.Log.Error(ex, $"Failed to read state for {mod.ModName}");
+            return null;
+        }
+    }
+
+    /// <summary>Redraws the local player. Safe to call when Penumbra is unavailable.</summary>
+    public void RedrawPlayer()
+    {
+        try
+        {
+            _redrawObject.Invoke(0, RedrawType.Redraw);
+        }
+        catch (Exception ex)
+        {
+            Svc.Log.Error(ex, "Failed to redraw player.");
+        }
+    }
+
     public bool SetManagedModState(ManagedMod mod, bool enable, Guid collectionId = default)
     {
         try

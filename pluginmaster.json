@@ -3,7 +3,7 @@
     "Author": "Nao",
     "Name": "My Mod Manager",
     "InternalName": "MyModManager",
-    "AssemblyVersion": "1.0.0.1",
+    "AssemblyVersion": "1.0.0.2",
     "Description": "A unofficial standalone mod manager for Penumbra. Toggle mods and options quickly via shortcuts and a favorite list.",
     "Punchline": "Bookmark and toggle Penumbra mods and options via shortcuts.",
     "ApplicableTarget": "FFXIV",
