@@ -40,6 +40,9 @@ public class ModManagerWindow : Window, IDisposable
     private GroupType selectedGroupType = GroupType.Single;
     private Dictionary<string, (string[] Options, GroupType Type)> currentModOptions = new();
 
+    // When non-null, the top form is editing the entry with this Id rather than adding a new one.
+    private string? editingModId = null;
+
     public ModManagerWindow(Plugin plugin)
       : base("My Mod Manager - Manage", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
@@ -64,7 +67,10 @@ public class ModManagerWindow : Window, IDisposable
     private void RefreshPenumbraModStates()
     {
         if ((DateTime.Now - lastModStateRefresh).TotalSeconds < 2) return;
-        
+        // Arm the throttle before attempting, so failures also wait out the interval
+        // instead of retrying (and logging) every frame while Penumbra is unavailable.
+        lastModStateRefresh = DateTime.Now;
+
         try
         {
             Guid collectionId = plugin.Configuration.TargetCollectionId;
@@ -80,7 +86,6 @@ public class ModManagerWindow : Window, IDisposable
                 if (ec == PenumbraApiEc.Success && settings != null)
                 {
                     penumbraModStates = settings.ToDictionary(k => k.Key, v => (v.Value.Item1, v.Value.Item3));
-                    lastModStateRefresh = DateTime.Now;
                 }
             }
         }
@@ -93,6 +98,7 @@ public class ModManagerWindow : Window, IDisposable
     private void RefreshPenumbraCollections()
     {
         if ((DateTime.Now - lastCollectionRefresh).TotalSeconds < 10) return;
+        lastCollectionRefresh = DateTime.Now;
 
         try
         {
@@ -100,7 +106,6 @@ public class ModManagerWindow : Window, IDisposable
             if (collections != null)
             {
                 penumbraCollections = collections;
-                lastCollectionRefresh = DateTime.Now;
             }
         }
         catch (Exception ex)
@@ -112,14 +117,14 @@ public class ModManagerWindow : Window, IDisposable
     private void RefreshPenumbraMods()
     {
         if ((DateTime.Now - lastModRefresh).TotalSeconds < 5) return;
-        
+        lastModRefresh = DateTime.Now;
+
         try
         {
             var mods = new Penumbra.Api.IpcSubscribers.GetModList(plugin.Interface).Invoke();
             if (mods != null)
             {
                 penumbraMods = mods.ToDictionary(k => k.Key, v => v.Value);
-                lastModRefresh = DateTime.Now;
             }
         }
         catch (Exception ex)
@@ -166,9 +171,16 @@ public class ModManagerWindow : Window, IDisposable
         ImGui.Separator();
         ImGui.Spacing();
 
-        ImGui.Text("Add New Managed Mod / Option Shortcut");
-        
+        bool isEditing = editingModId != null;
+        if (isEditing)
+            ImGui.TextColored(ImGuiColors.DalamudYellow, $"Editing: {newModDisplayName}");
+        else
+            ImGui.Text("Add New Managed Mod / Option Shortcut");
+
         RefreshPenumbraMods();
+
+        if (isEditing && !currentModOptions.Any() && !string.IsNullOrEmpty(selectedGroupName))
+            ImGui.TextDisabled("Mod not currently installed - binding preserved.");
 
         string oldSearch = modSearchText;
         ImGui.SetNextItemWidth(300);
@@ -197,7 +209,11 @@ public class ModManagerWindow : Window, IDisposable
                     {
                         modSearchText = mod.Key;
                         newModDisplayName = mod.Value;
-                        
+                        selectedGroupName = string.Empty;
+                        selectedOptionName = string.Empty;
+                        selectedGroupType = GroupType.Single;
+                        currentModOptions.Clear();
+
                         var available = new Penumbra.Api.IpcSubscribers.GetAvailableModSettings(plugin.Interface).Invoke(modSearchText, modSearchText);
                         if (available != null)
                         {
@@ -233,11 +249,11 @@ public class ModManagerWindow : Window, IDisposable
                 ImGui.EndCombo();
             }
 
-            if (!string.IsNullOrEmpty(selectedGroupName))
+            if (!string.IsNullOrEmpty(selectedGroupName) && currentModOptions.TryGetValue(selectedGroupName, out var selectedGroupOptions))
             {
                 if (ImGui.BeginCombo("Specific Option", string.IsNullOrEmpty(selectedOptionName) ? "Select an option..." : selectedOptionName))
                 {
-                    foreach (var opt in currentModOptions[selectedGroupName].Options)
+                    foreach (var opt in selectedGroupOptions.Options)
                     {
                         if (ImGui.Selectable(opt, selectedOptionName == opt))
                         {
@@ -292,33 +308,88 @@ public class ModManagerWindow : Window, IDisposable
 
         ImGui.Columns(1);
 
-        if (ImGui.Button("Add to Favorites") && !string.IsNullOrWhiteSpace(modSearchText))
+        // A group without a chosen option would silently degrade to toggling the
+        // whole mod, so block the add until an option is picked (or group cleared).
+        bool groupWithoutOption = !string.IsNullOrEmpty(selectedGroupName) && string.IsNullOrEmpty(selectedOptionName);
+        if (groupWithoutOption)
         {
-            var newMod = new ManagedMod
-            {
-                ModName = modSearchText,
-                DisplayName = string.IsNullOrWhiteSpace(newModDisplayName) ? modSearchText : newModDisplayName,
-                ShortcutName = newModShortcutName,
-                CategoryName = string.IsNullOrWhiteSpace(newModCategoryName) ? "Default" : newModCategoryName,
-                IsAnimation = newModIsAnimation,
-                AnimationCommand = newModAnimationCommand,
-                GroupName = selectedGroupName,
-                OptionName = selectedOptionName,
-                GroupType = selectedGroupType
-            };
-            plugin.Configuration.ManagedMods.Add(newMod);
-            plugin.Configuration.Save();
-
-            modSearchText = string.Empty;
-            newModDisplayName = string.Empty;
-            newModShortcutName = string.Empty;
-            newModCategoryName = "Default";
-            newModIsAnimation = false;
-            newModAnimationCommand = string.Empty;
-            selectedGroupName = string.Empty;
-            selectedOptionName = string.Empty;
-            currentModOptions.Clear();
+            ImGui.TextColored(ImGuiColors.DalamudYellow, "Select a specific option, or set the group back to '(None - Toggle whole mod)'.");
         }
+
+        using (ImRaii.Disabled(groupWithoutOption))
+        {
+            if (ImGui.Button(isEditing ? "Save Changes" : "Add to Favorites") && !string.IsNullOrWhiteSpace(modSearchText))
+            {
+                var target = isEditing
+                    ? plugin.Configuration.ManagedMods.FirstOrDefault(m => m.Id == editingModId)
+                    : null;
+
+                // When editing, update the existing entry in place (preserving Id and IsEnabled);
+                // otherwise append a new one. A deleted-while-editing entry (target == null) is a no-op.
+                if (!isEditing)
+                {
+                    target = new ManagedMod();
+                    plugin.Configuration.ManagedMods.Add(target);
+                }
+
+                if (target != null)
+                {
+                    target.ModName = modSearchText;
+                    target.DisplayName = string.IsNullOrWhiteSpace(newModDisplayName) ? modSearchText : newModDisplayName;
+                    target.ShortcutName = newModShortcutName;
+                    target.CategoryName = string.IsNullOrWhiteSpace(newModCategoryName) ? "Default" : newModCategoryName;
+                    target.IsAnimation = newModIsAnimation;
+                    target.AnimationCommand = newModAnimationCommand;
+                    target.GroupName = selectedGroupName;
+                    target.OptionName = selectedOptionName;
+                    target.GroupType = selectedGroupType;
+                    plugin.Configuration.Save();
+                }
+
+                ResetModForm();
+            }
+        }
+
+        if (isEditing)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+                ResetModForm();
+        }
+    }
+
+    private void ResetModForm()
+    {
+        modSearchText = string.Empty;
+        newModDisplayName = string.Empty;
+        newModShortcutName = string.Empty;
+        newModCategoryName = "Default";
+        newModIsAnimation = false;
+        newModAnimationCommand = string.Empty;
+        selectedGroupName = string.Empty;
+        selectedOptionName = string.Empty;
+        selectedGroupType = GroupType.Single;
+        currentModOptions.Clear();
+        editingModId = null;
+    }
+
+    private void BeginEditMod(ManagedMod mod)
+    {
+        editingModId = mod.Id;
+        modSearchText = mod.ModName;
+        newModDisplayName = mod.DisplayName;
+        newModShortcutName = mod.ShortcutName;
+        newModCategoryName = mod.CategoryName;
+        newModIsAnimation = mod.IsAnimation;
+        newModAnimationCommand = mod.AnimationCommand;
+        selectedGroupName = mod.GroupName;
+        selectedOptionName = mod.OptionName;
+        selectedGroupType = mod.GroupType;
+
+        currentModOptions.Clear();
+        var available = new Penumbra.Api.IpcSubscribers.GetAvailableModSettings(plugin.Interface).Invoke(mod.ModName, mod.ModName);
+        if (available != null)
+            currentModOptions = available.ToDictionary(k => k.Key, v => (v.Value.Item1, v.Value.Item2));
     }
 
     private void DrawFavoriteModsList()
@@ -381,6 +452,12 @@ public class ModManagerWindow : Window, IDisposable
     private void DrawFavoriteModItem(ManagedMod mod, bool hideDisplayName = false)
     {
         ImGui.PushID($"fav_{mod.Id}");
+
+        if (mod.Id == editingModId)
+        {
+            ImGui.TextColored(ImGuiColors.DalamudYellow, ">");
+            ImGui.SameLine();
+        }
 
         bool isEnabled = false;
         bool modExists = penumbraModStates.TryGetValue(mod.ModName, out var state);
@@ -497,6 +574,11 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.TextDisabled($"[{mod.GroupName}: {mod.OptionName}]");
             ImGui.SameLine();
         }
+        else if (!string.IsNullOrEmpty(mod.GroupName))
+        {
+            ImGui.TextColored(ImGuiColors.DalamudYellow, $"[{mod.GroupName}: no option - toggles whole mod!]");
+            ImGui.SameLine();
+        }
         
         if (mod.IsAnimation && !string.IsNullOrWhiteSpace(mod.AnimationCommand))
         {
@@ -509,10 +591,18 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.SetTooltip($"Directory: {mod.ModName}");
         }
 
+        ImGui.SameLine(ImGui.GetContentRegionMax().X - 60);
+        if (ImGuiComponents.IconButton(FontAwesomeIcon.Pen))
+        {
+            BeginEditMod(mod);
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Edit favorite");
+
         ImGui.SameLine(ImGui.GetContentRegionMax().X - 30);
         if (ImGuiComponents.IconButton(FontAwesomeIcon.Trash))
         {
             plugin.Configuration.ManagedMods.Remove(mod);
+            if (mod.Id == editingModId) ResetModForm();
             plugin.Configuration.Save();
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove from favorites");

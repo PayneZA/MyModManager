@@ -11,35 +11,51 @@ namespace MyModManager.Helpers;
 
 public class PenumbraOptionSetter
 {
-    private readonly IDalamudPluginInterface _pi;
+    // IPC subscribers are constructed once and reused; each construction re-resolves
+    // the Penumbra IPC gate, so caching avoids that cost on every toggle.
+    private readonly GetCollection _getCollection;
+    private readonly GetCollections _getCollections;
+    private readonly TrySetMod _trySetMod;
+    private readonly TrySetModSetting _trySetModSetting;
+    private readonly TrySetModSettings _trySetModSettings;
+    private readonly GetCurrentModSettings _getCurrentModSettings;
+    private readonly GetAvailableModSettings _getAvailableModSettings;
+    private readonly RedrawObject _redrawObject;
 
     public PenumbraOptionSetter(IDalamudPluginInterface pi)
     {
-        _pi = pi;
+        _getCollection = new GetCollection(pi);
+        _getCollections = new GetCollections(pi);
+        _trySetMod = new TrySetMod(pi);
+        _trySetModSetting = new TrySetModSetting(pi);
+        _trySetModSettings = new TrySetModSettings(pi);
+        _getCurrentModSettings = new GetCurrentModSettings(pi);
+        _getAvailableModSettings = new GetAvailableModSettings(pi);
+        _redrawObject = new RedrawObject(pi);
     }
 
     public bool SetManagedModState(ManagedMod mod, bool enable, Guid collectionId = default)
     {
-        if (collectionId == Guid.Empty)
-        {
-            (collectionId, _) = new GetCollection(_pi).Invoke(ApiCollectionType.Current) ?? (Guid.Empty, string.Empty);
-        }
-
-        if (collectionId == Guid.Empty) return false;
-
         try
         {
+            if (collectionId == Guid.Empty)
+            {
+                (collectionId, _) = _getCollection.Invoke(ApiCollectionType.Current) ?? (Guid.Empty, string.Empty);
+            }
+
+            if (collectionId == Guid.Empty) return false;
+
             if (!string.IsNullOrEmpty(mod.OptionName))
             {
                 if (enable)
                 {
                     // Ensure the base mod is enabled when we enable a specific option
-                    new TrySetMod(_pi).Invoke(collectionId, mod.ModName, true, mod.ModName);
+                    _trySetMod.Invoke(collectionId, mod.ModName, true, mod.ModName);
                 }
 
                 if (mod.GroupType == GroupType.Multi)
                 {
-                    var current = new GetCurrentModSettings(_pi).Invoke(collectionId, mod.ModName, mod.ModName, false);
+                    var current = _getCurrentModSettings.Invoke(collectionId, mod.ModName, mod.ModName, false);
                     if (current.Item1 != PenumbraApiEc.Success || current.Item2 == null) return false;
 
                     var enabledList = current.Item2.Value.Item3.TryGetValue(mod.GroupName, out var list) ? list : new List<string>();
@@ -51,17 +67,17 @@ public class PenumbraOptionSetter
                     {
                         enabledList.Remove(mod.OptionName);
                     }
-                    return new TrySetModSettings(_pi).Invoke(collectionId, mod.ModName, mod.GroupName, enabledList, mod.ModName) == PenumbraApiEc.Success;
+                    return _trySetModSettings.Invoke(collectionId, mod.ModName, mod.GroupName, enabledList, mod.ModName) == PenumbraApiEc.Success;
                 }
                 else
                 {
                     if (enable)
                     {
-                        return new TrySetModSetting(_pi).Invoke(collectionId, mod.ModName, mod.GroupName, mod.OptionName, mod.ModName) == PenumbraApiEc.Success;
+                        return _trySetModSetting.Invoke(collectionId, mod.ModName, mod.GroupName, mod.OptionName, mod.ModName) == PenumbraApiEc.Success;
                     }
                     else
                     {
-                        // Single select options cannot be "disabled". 
+                        // Single select options cannot be "disabled".
                         // We return true here to allow the UI to untick, without dropping the mod's settings.
                         return true;
                     }
@@ -69,7 +85,7 @@ public class PenumbraOptionSetter
             }
             else
             {
-                return new TrySetMod(_pi).Invoke(collectionId, mod.ModName, enable, mod.ModName) == PenumbraApiEc.Success;
+                return _trySetMod.Invoke(collectionId, mod.ModName, enable, mod.ModName) == PenumbraApiEc.Success;
             }
         }
         catch (Exception ex)
@@ -84,71 +100,79 @@ public class PenumbraOptionSetter
     /// </summary>
     public bool SetOptionByName(string modName, string searchTerm, bool enable, string? collectionName = null)
     {
-        Guid id = Guid.Empty;
+        try
+        {
+            Guid id = Guid.Empty;
 
-        if (string.IsNullOrEmpty(collectionName))
-        {
-            (id, _) = new GetCollection(_pi).Invoke(ApiCollectionType.Current) ?? (Guid.Empty, string.Empty);
-        }
-        else
-        {
-            var collections = new GetCollections(_pi).Invoke();
-            foreach (var collection in collections)
+            if (string.IsNullOrEmpty(collectionName))
             {
-                if (collection.Value.Equals(collectionName, StringComparison.OrdinalIgnoreCase))
+                (id, _) = _getCollection.Invoke(ApiCollectionType.Current) ?? (Guid.Empty, string.Empty);
+            }
+            else
+            {
+                var collections = _getCollections.Invoke();
+                foreach (var collection in collections)
                 {
-                    id = collection.Key;
-                    break;
+                    if (collection.Value.Equals(collectionName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        id = collection.Key;
+                        break;
+                    }
                 }
             }
-        }
 
-        if (id == Guid.Empty) return false;
+            if (id == Guid.Empty) return false;
 
-        var available = new GetAvailableModSettings(_pi).Invoke(modName, modName);
-        if (available == null) return false;
+            var available = _getAvailableModSettings.Invoke(modName, modName);
+            if (available == null) return false;
 
-        foreach (var group in available)
-        {
-            var groupName = group.Key;
-            var (options, groupType) = group.Value;
-
-            var matchingOption = options.FirstOrDefault(o => o.StartsWith(searchTerm, StringComparison.OrdinalIgnoreCase));
-            if (matchingOption == null) continue;
-
-            bool result = enable 
-                ? EnableOption(id, modName, groupName, matchingOption, groupType) 
-                : DisableOption(id, modName, groupName, matchingOption, groupType);
-
-            if (result)
+            foreach (var group in available)
             {
-                new RedrawObject(_pi).Invoke(0, RedrawType.Redraw);
-                return true;
-            }
-        }
+                var groupName = group.Key;
+                var (options, groupType) = group.Value;
 
-        return false;
+                var matchingOption = options.FirstOrDefault(o => o.StartsWith(searchTerm, StringComparison.OrdinalIgnoreCase));
+                if (matchingOption == null) continue;
+
+                bool result = enable
+                    ? EnableOption(id, modName, groupName, matchingOption, groupType)
+                    : DisableOption(id, modName, groupName, matchingOption, groupType);
+
+                if (result)
+                {
+                    _redrawObject.Invoke(0, RedrawType.Redraw);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Svc.Log.Error(ex, $"Failed to set option '{searchTerm}' for {modName}");
+            return false;
+        }
     }
 
     private bool EnableOption(Guid collectionId, string modName, string groupName, string optionName, GroupType type)
     {
         // Ensure base mod is enabled
-        new TrySetMod(_pi).Invoke(collectionId, modName, true, modName);
+        _trySetMod.Invoke(collectionId, modName, true, modName);
 
         if (type == GroupType.Single)
         {
-            return new TrySetModSetting(_pi).Invoke(collectionId, modName, groupName, optionName, modName) == PenumbraApiEc.Success;
+            return _trySetModSetting.Invoke(collectionId, modName, groupName, optionName, modName) == PenumbraApiEc.Success;
         }
         else
         {
-            var current = new GetCurrentModSettings(_pi).Invoke(collectionId, modName, modName, false);
+            var current = _getCurrentModSettings.Invoke(collectionId, modName, modName, false);
             if (current.Item1 != PenumbraApiEc.Success || current.Item2 == null) return false;
 
             var enabledList = current.Item2.Value.Item3.TryGetValue(groupName, out var list) ? list : new List<string>();
             if (!enabledList.Contains(optionName))
             {
                 enabledList.Add(optionName);
-                return new TrySetModSettings(_pi).Invoke(collectionId, modName, groupName, enabledList, modName) == PenumbraApiEc.Success;
+                return _trySetModSettings.Invoke(collectionId, modName, groupName, enabledList, modName) == PenumbraApiEc.Success;
             }
             return true;
         }
@@ -158,19 +182,19 @@ public class PenumbraOptionSetter
     {
         if (type == GroupType.Multi)
         {
-            var current = new GetCurrentModSettings(_pi).Invoke(collectionId, modName, modName, false);
+            var current = _getCurrentModSettings.Invoke(collectionId, modName, modName, false);
             if (current.Item1 != PenumbraApiEc.Success || current.Item2 == null) return false;
 
             var enabledList = current.Item2.Value.Item3.TryGetValue(groupName, out var list) ? list : new List<string>();
             if (enabledList.Remove(optionName))
             {
-                return new TrySetModSettings(_pi).Invoke(collectionId, modName, groupName, enabledList, modName) == PenumbraApiEc.Success;
+                return _trySetModSettings.Invoke(collectionId, modName, groupName, enabledList, modName) == PenumbraApiEc.Success;
             }
             return true;
         }
         else
         {
-            // Single select options cannot be "disabled". 
+            // Single select options cannot be "disabled".
             return true;
         }
     }

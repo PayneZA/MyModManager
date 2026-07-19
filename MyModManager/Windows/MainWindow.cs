@@ -41,7 +41,10 @@ public class MainWindow : Window, IDisposable
     private void RefreshPenumbraModStates()
     {
         if ((DateTime.Now - lastModStateRefresh).TotalSeconds < 2) return;
-        
+        // Arm the throttle before attempting, so failures also wait out the interval
+        // instead of retrying (and logging) every frame while Penumbra is unavailable.
+        lastModStateRefresh = DateTime.Now;
+
         try
         {
             Guid collectionId = plugin.Configuration.TargetCollectionId;
@@ -57,7 +60,6 @@ public class MainWindow : Window, IDisposable
                 if (ec == PenumbraApiEc.Success && settings != null)
                 {
                     penumbraModStates = settings.ToDictionary(k => k.Key, v => (v.Value.Item1, v.Value.Item3));
-                    lastModStateRefresh = DateTime.Now;
                 }
             }
         }
@@ -247,6 +249,11 @@ public class MainWindow : Window, IDisposable
         if (!string.IsNullOrEmpty(mod.OptionName))
         {
             ImGui.TextDisabled($"[{mod.GroupName}: {mod.OptionName}]");
+            ImGui.SameLine();
+        }
+        else if (!string.IsNullOrEmpty(mod.GroupName))
+        {
+            ImGui.TextColored(ImGuiColors.DalamudYellow, $"[{mod.GroupName}: no option - toggles whole mod!]");
             ImGui.SameLine();
         }
         
