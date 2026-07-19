@@ -2,7 +2,7 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
     <Version>1.0.0.2</Version>
-    <Description>A standalone Penumbra Mod Manager for quick toggling and organizing mod favorites.</Description>
+    <Description>An unofficial favorites manager for Penumbra mods - a small project made for friends, not affiliated with the Penumbra team.</Description>
     <PackageProjectUrl>https://github.com/PayneZA/MyModManager</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>

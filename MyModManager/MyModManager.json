@@ -4,7 +4,7 @@
   "Punchline": "Bookmark and toggle Penumbra mods and options via shortcuts.",
   "InternalName": "MyModManager",
   "AssemblyVersion": "1.0.0.2",
-  "Description": "A unofficial standalone mod manager for Penumbra. Toggle mods and options quickly via shortcuts and a favorite list.",
+  "Description": "An unofficial favorites manager for Penumbra mods - a small project made for friends, not affiliated with the Penumbra team. Toggle mods and options quickly via shortcuts and a favorites list.",
   "ApplicableTarget": "FFXIV",
   "Tags": [
     "utility",
