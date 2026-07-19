@@ -13,14 +13,13 @@
       "mods"
     ],
     "DalamudApiLevel": 15,
-    "DownloadLinkInstall": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
-    "DownloadLinkUpdate": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
-    "DownloadLinkTesting": "https://gitea.naonao.dev/NaoAdmin/MyModManager/releases/download/release/latest.zip",
+    "DownloadLinkInstall": "https://github.com/PayneZA/MyModManager/releases/latest/download/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/PayneZA/MyModManager/releases/latest/download/latest.zip",
+    "DownloadLinkTesting": "https://github.com/PayneZA/MyModManager/releases/latest/download/latest.zip",
     "LoadRequiredState": 0,
     "LoadSync": false,
     "CanUnloadAsync": true,
     "SupportsConfig": true,
-    "IconUrl": "http://gitea.naonao.dev/NaoAdmin/MyModManager/src/branch/main/main/icon.png",
-    "RepoUrl": "http://gitea.naonao.dev/NaoAdmin/MyModManager"
+    "RepoUrl": "https://github.com/PayneZA/MyModManager"
   }
 ]

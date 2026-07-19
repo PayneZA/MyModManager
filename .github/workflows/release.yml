@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download Dalamud dev distribution
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+          Expand-Archive dalamud.zip -DestinationPath "$env:RUNNER_TEMP/dalamud"
+          Add-Content $env:GITHUB_ENV "DALAMUD_HOME=$env:RUNNER_TEMP/dalamud"
+
+      - name: Build (Release)
+        run: dotnet build MyModManager.sln -c Release
+
+      - name: Verify manifest version matches tag
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+          $manifest = Get-Content MyModManager/bin/x64/Release/MyModManager/MyModManager.json -Raw | ConvertFrom-Json
+          if ($manifest.AssemblyVersion -ne $tagVersion) {
+            Write-Error "Tag $tagVersion does not match AssemblyVersion $($manifest.AssemblyVersion). Bump the .csproj <Version>, MyModManager.json and pluginmaster.json before tagging."
+          }
+
+      - name: Create release with plugin zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MyModManager/bin/x64/Release/MyModManager/latest.zip
+          generate_release_notes: true

@@ -11,6 +11,18 @@ This is a small project made for friends. It is **not** an official mod manager 
 - Toggle favorites from chat: `/mmm on|off|toggle <shortcut>`.
 - Optionally fire an emote/animation command when a favorite is played.
 
+## Installing in-game
+
+1. In FFXIV, open Dalamud settings (`/xlsettings`) → **Experimental** tab.
+2. Under **Custom Plugin Repositories**, paste:
+
+   ```
+   https://raw.githubusercontent.com/PayneZA/MyModManager/main/pluginmaster.json
+   ```
+
+3. Click the **+** button, then **Save and Close**.
+4. Open the plugin installer (`/xlplugins`), search for **My Mod Manager**, and install.
+
 ## Commands
 
 | Command | Effect |
