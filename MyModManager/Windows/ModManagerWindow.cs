@@ -1,4 +1,3 @@
-using ECommons.DalamudServices;
 using Dalamud.Interface.Colors;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
@@ -12,6 +11,7 @@ using System.Numerics;
 using Dalamud.Interface.Windowing;
 using MyModManager.Helpers;
 using MyModManager.Models;
+using MyModManager.Services;
 
 namespace MyModManager.Windows;
 
@@ -34,16 +34,16 @@ public class ModManagerWindow : Window, IDisposable
     private FavoriteFilter favoriteFilter = FavoriteFilter.All;
     private ContentRatingFilter ratingFilter = ContentRatingFilter.All;
     private string sceneTagFilter = FavoriteGrouping.SceneTagAll;
-    private Dictionary<string, string> penumbraMods = new();
-    private Dictionary<Guid, string> penumbraCollections = new();
-    private DateTime lastModRefresh = DateTime.MinValue;
-    private DateTime lastCollectionRefresh = DateTime.MinValue;
+    private int newModPose = 0;
+    private string cachedModSearch = "\0";
+    private int cachedModSearchVersion = -1;
+    private List<KeyValuePair<string, string>> filteredPenumbraMods = new();
     private string cachedSearchText = "\0";
     private int cachedRevision = -1;
     private FavoriteFilter cachedFilter = (FavoriteFilter)(-1);
     private ContentRatingFilter cachedRatingFilter = (ContentRatingFilter)(-1);
     private string cachedSceneTag = "\0";
-    private string? statusMessage;
+    private readonly StatusLine status = new();
     private List<(string Category, List<(string DisplayName, List<ManagedMod> Mods)> Names)> groupedFavorites = new();
 
     private string selectedGroupName = string.Empty;
@@ -55,7 +55,7 @@ public class ModManagerWindow : Window, IDisposable
     private AnimationScanResult? animationScan;
 
     public ModManagerWindow(Plugin plugin)
-      : base("Add/Edit", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+      : base("Add/Edit###MyModManager.Manage", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(500, 400), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
         this.plugin = plugin;
@@ -66,8 +66,7 @@ public class ModManagerWindow : Window, IDisposable
     public override void Draw()
     {
         ImGui.Spacing();
-        plugin.PenumbraOptionSetter.RefreshModStatesIfDue(plugin.Configuration.TargetCollectionId);
-        RefreshPenumbraCollections();
+        ManagedModListUi.DrawPenumbraBanner(plugin);
         DrawCollectionPicker();
         ImGui.Spacing();
         if (editingModId != null)
@@ -90,24 +89,24 @@ public class ModManagerWindow : Window, IDisposable
         DrawFavoriteModsList();
     }
 
-    private void RefreshPenumbraCollections()
+    private Dictionary<string, (string[] Options, GroupType Type)> LoadOptions(string modDirectory) =>
+        plugin.Penumbra.GetOptionGroups(modDirectory)?.ToDictionary(g => g.Name, g => (g.Options, g.Type))
+        ?? new Dictionary<string, (string[] Options, GroupType Type)>();
+
+    /// <summary>Filters and sorts the Penumbra mod list only when the search text or mod list changes.</summary>
+    private List<KeyValuePair<string, string>> FilteredPenumbraMods()
     {
-        if ((DateTime.Now - lastCollectionRefresh).TotalSeconds < 10) return;
-        lastCollectionRefresh = DateTime.Now;
+        if (cachedModSearch == modSearchText && cachedModSearchVersion == plugin.Penumbra.Version)
+            return filteredPenumbraMods;
 
-        var collections = plugin.PenumbraOptionSetter.GetCollections();
-        if (collections != null)
-            penumbraCollections = collections;
-    }
-
-    private void RefreshPenumbraMods()
-    {
-        if ((DateTime.Now - lastModRefresh).TotalSeconds < 5) return;
-        lastModRefresh = DateTime.Now;
-
-        var mods = plugin.PenumbraOptionSetter.GetModList();
-        if (mods != null)
-            penumbraMods = mods;
+        cachedModSearch = modSearchText;
+        cachedModSearchVersion = plugin.Penumbra.Version;
+        filteredPenumbraMods = plugin.Penumbra.ModList
+            .Where(m => m.Value.Contains(modSearchText, StringComparison.OrdinalIgnoreCase) || m.Key.Contains(modSearchText, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(m => m.Value.StartsWith(modSearchText, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(m => m.Value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return filteredPenumbraMods;
     }
 
     private void DrawAnimationScan()
@@ -180,18 +179,10 @@ public class ModManagerWindow : Window, IDisposable
 
     private void RunAnimationScan()
     {
-        lastModRefresh = DateTime.MinValue;
-        RefreshPenumbraMods();
-        if (penumbraMods.Count == 0)
-        {
-            var mods = plugin.PenumbraOptionSetter.GetModList();
-            if (mods != null)
-                penumbraMods = mods;
-        }
-        var changed = plugin.PenumbraOptionSetter.GetChangedItemsSnapshot();
+        var changed = plugin.Penumbra.GetChangedItemsSnapshot();
         if (changed == null)
         {
-            statusMessage = "Could not read Penumbra Changed Items.";
+            status.Set("Couldn't read Penumbra's Changed Items. Is Penumbra running?");
             animationScan = null;
             return;
         }
@@ -201,14 +192,12 @@ public class ModManagerWindow : Window, IDisposable
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         animationScan = AnimationModScanner.Scan(
-            penumbraMods,
+            plugin.Penumbra.ModList,
             changed,
-            managed);
+            managed,
+            plugin.Emotes);
 
-        foreach (var ex in animationScan.ExcludedMultiEmote)
-            Svc.Chat.Print($"[MMM] Excluded from import due to multiple emotes: {ex.DisplayName}");
-
-        statusMessage = $"Scan found {animationScan.Importable.Count} to import, {animationScan.ExcludedMultiEmote.Count} excluded.";
+        status.Set($"Found {animationScan.Importable.Count} to import, {animationScan.ExcludedMultiEmote.Count} excluded.", 8);
     }
 
     private void ImportSelectedAnimations()
@@ -236,44 +225,44 @@ public class ModManagerWindow : Window, IDisposable
         }
 
         plugin.Configuration.Save();
-        statusMessage = $"Added {added} animation mods.";
+        status.Set($"Added {added} animation mods.");
         animationScan = null;
     }
 
     private void DrawCollectionPicker()
     {
-        ImGui.Text("Target Collection Settings");
+        var config = plugin.Configuration;
+        var penumbra = plugin.Penumbra;
+        var followLabel = penumbra.FollowsPlayer && penumbra.CollectionName.Length > 0
+            ? $"Your character's collection ({penumbra.CollectionName})"
+            : "Your character's collection";
+        var preview = config.TargetCollectionId == Guid.Empty || penumbra.TargetCollectionMissing
+            ? followLabel
+            : penumbra.CollectionName;
 
-        string currentName = "Current Collection";
-        if (plugin.Configuration.TargetCollectionId != Guid.Empty && penumbraCollections.TryGetValue(plugin.Configuration.TargetCollectionId, out var name))
+        ImGui.SetNextItemWidth(320);
+        using (var combo = ImRaii.Combo("Collection", preview))
         {
-            currentName = name;
-        }
-
-        ImGui.SetNextItemWidth(300);
-        if (ImGui.BeginCombo("Target Collection", currentName))
-        {
-            if (ImGui.Selectable("Current Collection", plugin.Configuration.TargetCollectionId == Guid.Empty))
+            if (combo.Success)
             {
-                plugin.Configuration.TargetCollectionId = Guid.Empty;
-                plugin.Configuration.Save();
-                plugin.PenumbraOptionSetter.ForceModStateRefresh();
-            }
+                if (ImGui.Selectable(followLabel, config.TargetCollectionId == Guid.Empty))
+                    SetTargetCollection(Guid.Empty);
 
-            foreach (var col in penumbraCollections)
-            {
-                if (ImGui.Selectable(col.Value, plugin.Configuration.TargetCollectionId == col.Key))
+                foreach (var (id, name) in penumbra.Collections.OrderBy(c => c.Value, StringComparer.OrdinalIgnoreCase))
                 {
-                    plugin.Configuration.TargetCollectionId = col.Key;
-                    plugin.Configuration.Save();
-                    plugin.PenumbraOptionSetter.ForceModStateRefresh();
+                    if (ImGui.Selectable($"{name}##{id}", config.TargetCollectionId == id))
+                        SetTargetCollection(id);
                 }
             }
-            ImGui.EndCombo();
         }
-        ManagedModListUi.Hint("Penumbra collection that enable/disable and Disable temp apply to.");
+        ManagedModListUi.Hint("The Penumbra collection entries are turned on and off in.\nRecommended: your character's collection, so changes always affect you.");
+    }
 
-        ImGui.TextDisabled("Toggles will apply to this collection.");
+    private void SetTargetCollection(Guid id)
+    {
+        plugin.Configuration.TargetCollectionId = id;
+        plugin.Configuration.Save();
+        plugin.Penumbra.Invalidate();
     }
 
     private void DrawAddEditForm()
@@ -281,8 +270,6 @@ public class ModManagerWindow : Window, IDisposable
         bool isEditing = editingModId != null;
         if (isEditing)
             ImGui.TextColored(ImGuiColors.DalamudYellow, $"Editing: {newModDisplayName}");
-
-        RefreshPenumbraMods();
 
         if (isEditing && !currentModOptions.Any() && !string.IsNullOrEmpty(selectedGroupName))
             ImGui.TextDisabled("Mod not currently installed - binding preserved.");
@@ -302,11 +289,7 @@ public class ModManagerWindow : Window, IDisposable
 
         if (!string.IsNullOrWhiteSpace(modSearchText))
         {
-            var filteredMods = penumbraMods
-                .Where(m => m.Value.Contains(modSearchText, StringComparison.OrdinalIgnoreCase) || m.Key.Contains(modSearchText, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(m => m.Value.StartsWith(modSearchText, StringComparison.OrdinalIgnoreCase))
-                .ThenBy(m => m.Value, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var filteredMods = FilteredPenumbraMods();
 
             if (filteredMods.Count > 0)
             {
@@ -334,11 +317,7 @@ public class ModManagerWindow : Window, IDisposable
                                 selectedGroupName = string.Empty;
                                 selectedOptionName = string.Empty;
                                 selectedGroupType = GroupType.Single;
-                                currentModOptions.Clear();
-
-                                var available = plugin.PenumbraOptionSetter.GetAvailableSettings(modSearchText);
-                                if (available != null)
-                                    currentModOptions = available;
+                                currentModOptions = LoadOptions(modSearchText);
                             }
                             if (alreadyManaged)
                             {
@@ -354,7 +333,7 @@ public class ModManagerWindow : Window, IDisposable
                     }
                 }
             }
-            else if (!penumbraMods.ContainsKey(modSearchText))
+            else if (!plugin.Penumbra.ModList.ContainsKey(modSearchText))
             {
                 ImGui.TextDisabled("No mods match.");
             }
@@ -468,9 +447,11 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.Text("Chat Command:");
             ImGui.NextColumn();
             ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint("##animationCommand", "e.g. /dance", ref newModAnimationCommand, 64);
-            ManagedModListUi.Hint("Chat command sent when you press Play.");
+            ImGui.InputTextWithHint("##animationCommand", "e.g. /groundsit", ref newModAnimationCommand, 64);
+            ManagedModListUi.Hint("Emote command run when you press Play.");
             ImGui.NextColumn();
+
+            DrawCommandCheckAndPose();
         }
 
         ImGui.Columns(1);
@@ -486,7 +467,7 @@ public class ModManagerWindow : Window, IDisposable
 
         bool noModSelected = string.IsNullOrWhiteSpace(modSearchText);
 
-        bool unknownMod = !isEditing && !noModSelected && penumbraMods.Count > 0 && !penumbraMods.ContainsKey(modSearchText);
+        bool unknownMod = !isEditing && !noModSelected && plugin.Penumbra.ModList.Count > 0 && !plugin.Penumbra.ModList.ContainsKey(modSearchText);
         if (unknownMod)
         {
             ImGui.TextColored(ImGuiColors.DalamudYellow, "Pick a mod from the search results above - this text is not a Penumbra mod directory.");
@@ -518,13 +499,13 @@ public class ModManagerWindow : Window, IDisposable
                     target.Rating = newModRating;
                     target.Tags = newModTags.ToList();
                     plugin.Configuration.RememberTags(target.Tags);
-                    target.AnimationCommand = newModAnimationCommand;
+                    target.AnimationCommand = newModAnimationCommand.Trim();
+                    target.Pose = newModIsAnimation ? newModPose : 0;
                     target.GroupName = selectedGroupName;
                     target.OptionName = selectedOptionName;
                     target.GroupType = selectedGroupType;
                     plugin.Configuration.Save();
-                    if (!isEditing)
-                        statusMessage = $"Added {target.DisplayName}.";
+                    status.Set(isEditing ? $"Saved {target.DisplayName}." : $"Added {target.DisplayName}.");
                 }
 
                 var categoryToKeep = target?.CategoryName ?? "Default";
@@ -557,6 +538,7 @@ public class ModManagerWindow : Window, IDisposable
         newModTags = new List<string>();
         newTagDraft = string.Empty;
         newModAnimationCommand = string.Empty;
+        newModPose = 0;
         selectedGroupName = string.Empty;
         selectedOptionName = string.Empty;
         selectedGroupType = GroupType.Single;
@@ -630,14 +612,56 @@ public class ModManagerWindow : Window, IDisposable
         newModTags = (mod.Tags ?? new List<string>()).ToList();
         newTagDraft = string.Empty;
         newModAnimationCommand = mod.AnimationCommand;
+        newModPose = mod.Pose;
         selectedGroupName = mod.GroupName;
         selectedOptionName = mod.OptionName;
         selectedGroupType = mod.GroupType;
 
-        currentModOptions.Clear();
-        var available = plugin.PenumbraOptionSetter.GetAvailableSettings(mod.ModName);
-        if (available != null)
-            currentModOptions = available;
+        currentModOptions = LoadOptions(mod.ModName);
+    }
+
+    /// <summary>
+    /// Shows whether the command is a real emote, and for sit / ground sit / doze lets the
+    /// user pick which pose of the /cpose cycle this entry replaces.
+    /// </summary>
+    private void DrawCommandCheckAndPose()
+    {
+        var command = newModAnimationCommand.Trim();
+        if (command.Length > 0)
+        {
+            ImGui.NextColumn();
+            if (plugin.Commands.Check(command, out var reason) == CommandSender.Verdict.Rejected)
+                ImGui.TextColored(ImGuiColors.DalamudOrange, reason);
+            else if (plugin.Emotes.FromCommand(command) is { } emote)
+                ImGui.TextColored(ImGuiColors.HealerGreen, $"Emote: {emote.Name}");
+            else
+                ImGui.TextDisabled("Plugin command");
+            ImGui.NextColumn();
+        }
+
+        var poseEmote = plugin.Emotes.FromCommand(command);
+        if (poseEmote is not { PoseKind: not PoseKind.None, PoseCount: > 1 })
+            return;
+
+        ImGui.Text("Pose:");
+        ImGui.NextColumn();
+        ImGui.SetNextItemWidth(200);
+        var preview = newModPose == 0 ? "Any pose" : newModPose == 1 ? "Pose 1 (default)" : $"Pose {newModPose}";
+        using (var combo = ImRaii.Combo("##pose", preview))
+        {
+            if (combo.Success)
+            {
+                if (ImGui.Selectable("Any pose", newModPose == 0))
+                    newModPose = 0;
+                for (var pose = 1; pose <= poseEmote.PoseCount; pose++)
+                {
+                    if (ImGui.Selectable(pose == 1 ? "Pose 1 (default)" : $"Pose {pose}", newModPose == pose))
+                        newModPose = pose;
+                }
+            }
+        }
+        ManagedModListUi.Hint($"Which {poseEmote.Command} pose this animation replaces. Play selects it for you, like pressing /cpose until it appears.");
+        ImGui.NextColumn();
     }
 
     private void RebuildFavoriteCacheIfNeeded()
@@ -674,8 +698,7 @@ public class ModManagerWindow : Window, IDisposable
         ManagedModListUi.SameLineIfFits(200);
         ManagedModListUi.DrawSceneTagFilter(ref sceneTagFilter, plugin.Configuration.KnownTags);
 
-        if (!string.IsNullOrEmpty(statusMessage))
-            ImGui.TextDisabled(statusMessage);
+        status.Draw();
 
         ImGui.Spacing();
         RebuildFavoriteCacheIfNeeded();
@@ -745,60 +768,11 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.SameLine();
         }
 
-        bool isEnabled = false;
-        bool modExists = plugin.PenumbraOptionSetter.ModStates.TryGetValue(mod.ModName, out var state);
-
-        if (modExists)
-        {
-            if (!string.IsNullOrEmpty(mod.OptionName))
-            {
-                isEnabled = state.Settings != null && state.Settings.TryGetValue(mod.GroupName, out var list) && list.Contains(mod.OptionName);
-            }
-            else
-            {
-                isEnabled = state.Enabled;
-            }
-        }
-        else
-        {
-            isEnabled = mod.IsEnabled;
-        }
-
-        if (ImGui.Checkbox("##enabled", ref isEnabled))
-        {
-            if (!plugin.TryToggleFavorites(mod, isEnabled))
-                isEnabled = !isEnabled;
-        }
-
-        if (ImGui.IsItemHovered())
-        {
-            if (!string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single)
-            {
-                ImGui.SetTooltip("Enable this in the target Penumbra collection.\nSingle-select option: ticking selects it. It cannot be unticked - enable a different option from the same group instead.");
-            }
-            else
-            {
-                ImGui.SetTooltip("Enable or disable this in the target Penumbra collection.");
-            }
-        }
-
-        if (mod.IsAnimation)
-        {
-            ImGui.SameLine();
-            if (ImGuiComponents.IconButton(FontAwesomeIcon.Play))
-            {
-                if (!isEnabled)
-                    plugin.TryToggleFavorites(mod, true);
-
-                if (!string.IsNullOrWhiteSpace(mod.AnimationCommand))
-                    plugin.SendAnimationCommand(mod.AnimationCommand);
-            }
-            ManagedModListUi.Hint($"Play animation: {mod.AnimationCommand}");
-        }
+        ManagedModListUi.DrawEntryControls(plugin, mod);
 
         ImGui.SameLine();
-        ManagedModListUi.DrawClippedRowLabels(mod, hideDisplayName, ManagedModListUi.AddEditGutter);
-        ManagedModListUi.HandleLabelGroupInteraction(mod, ref statusMessage);
+        ManagedModListUi.DrawClippedRowLabels(mod, hideDisplayName, ManagedModListUi.AddEditGutter, plugin.Entries.IsMissing(mod));
+        ManagedModListUi.HandleLabelGroupInteraction(mod, status);
 
         ImGui.SameLine(ImGui.GetContentRegionMax().X - 90);
         var starColor = mod.IsFavorite ? ImGuiColors.DalamudYellow : ImGuiColors.DalamudGrey;
@@ -816,14 +790,20 @@ public class ModManagerWindow : Window, IDisposable
             BeginEditMod(mod);
         ManagedModListUi.Hint("Edit this entry in the form above.");
 
+        // Same convention as Penumbra: deleting needs Ctrl held, so a stray click can't lose an entry.
         ImGui.SameLine(ImGui.GetContentRegionMax().X - 30);
-        if (ImGuiComponents.IconButton(FontAwesomeIcon.Trash))
+        var ctrlHeld = ImGui.GetIO().KeyCtrl;
+        using (ImRaii.Disabled(!ctrlHeld))
         {
-            plugin.Configuration.ManagedMods.Remove(mod);
-            if (mod.Id == editingModId) ResetModForm();
-            plugin.Configuration.Save();
+            if (ImGuiComponents.IconButton(FontAwesomeIcon.Trash))
+            {
+                plugin.Configuration.ManagedMods.Remove(mod);
+                if (mod.Id == editingModId) ResetModForm();
+                plugin.Configuration.Save();
+                status.Set($"Removed {mod.DisplayName}.");
+            }
         }
-        ManagedModListUi.Hint("Remove this entry from the catalog.");
+        ManagedModListUi.Hint(ctrlHeld ? "Remove this entry from the catalog." : "Hold Ctrl and click to remove this entry.");
 
         ImGui.PopID();
     }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using MyModManager.Services;
 using Penumbra.Api.Enums;
 
 namespace MyModManager.Helpers;
@@ -31,7 +32,8 @@ public static class AnimationModScanner
     public static AnimationScanResult Scan(
         IReadOnlyDictionary<string, string> modList,
         IReadOnlyList<(string ModDirectory, Dictionary<string, object?> ChangedItems)> changedItems,
-        IReadOnlySet<string> alreadyManagedDirectories)
+        IReadOnlySet<string> alreadyManagedDirectories,
+        EmoteData emotes)
     {
         var result = new AnimationScanResult();
         var byDirectory = new Dictionary<string, Dictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
@@ -46,7 +48,7 @@ public static class AnimationModScanner
             byDirectory.TryGetValue(directory, out var items);
             items ??= new Dictionary<string, object?>();
 
-            Classify(directory, displayName, items, result);
+            Classify(directory, displayName, items, result, emotes);
         }
 
         result.Importable.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
@@ -58,7 +60,8 @@ public static class AnimationModScanner
         string directory,
         string displayName,
         Dictionary<string, object?> items,
-        AnimationScanResult result)
+        AnimationScanResult result,
+        EmoteData emotes)
     {
         var emoteNames = new List<string>();
         foreach (var kv in items)
@@ -90,7 +93,7 @@ public static class AnimationModScanner
             ModDirectory = directory,
             DisplayName = displayName,
             EmoteName = emote,
-            Command = EmoteCommandMapper.FromChangedItemName(emote) ?? string.Empty,
+            Command = emotes.FromName(emote)?.Command ?? string.Empty,
             Selected = true
         });
     }

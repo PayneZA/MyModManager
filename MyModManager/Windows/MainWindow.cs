@@ -3,7 +3,6 @@ using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Bindings.ImGui;
-using Penumbra.Api.Enums;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -23,11 +22,11 @@ public class MainWindow : Window, IDisposable
     private string sceneTagFilter = FavoriteGrouping.SceneTagAll;
     private ContentRatingFilter cachedRatingFilter = (ContentRatingFilter)(-1);
     private string cachedSceneTag = "\0";
-    private string? statusMessage;
+    private readonly StatusLine status = new();
     private List<(string Category, List<(string DisplayName, List<ManagedMod> Mods)> Names)> groupedFavorites = new();
 
     public MainWindow(Plugin plugin)
-      : base("Favorites", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+      : base("Favorites###MyModManager.Favorites", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(300, 400), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
         this.plugin = plugin;
@@ -38,7 +37,7 @@ public class MainWindow : Window, IDisposable
     public override void Draw()
     {
         ImGui.Spacing();
-        plugin.PenumbraOptionSetter.RefreshModStatesIfDue(plugin.Configuration.TargetCollectionId);
+        ManagedModListUi.DrawPenumbraBanner(plugin);
         DrawFavoriteModsList();
     }
 
@@ -77,15 +76,16 @@ public class MainWindow : Window, IDisposable
         ManagedModListUi.DrawRatingRadios(ref ratingFilter, "fav");
         ManagedModListUi.SameLineIfFits(200);
         ManagedModListUi.DrawSceneTagFilter(ref sceneTagFilter, plugin.Configuration.KnownTags);
-        ManagedModListUi.SameLineIfFits(120);
-        if (ImGui.Button("Disable temp"))
-            plugin.DisableAllTempMods();
-        ManagedModListUi.Hint("Turn off every Temp-tagged mod in the target Penumbra collection.");
-
-        if (!string.IsNullOrEmpty(statusMessage))
+        ManagedModListUi.SameLineIfFits(160);
+        var tempOn = plugin.Entries.CountTemporaryOn();
+        using (ImRaii.Disabled(tempOn == 0 && plugin.Configuration.SuspendedIds.Count == 0))
         {
-            ImGui.TextDisabled(statusMessage);
+            if (ImGui.Button(tempOn > 0 ? $"Turn off temporary ({tempOn})###tempOff" : "Turn off temporary###tempOff"))
+                plugin.Entries.TurnOffTemporary();
         }
+        ManagedModListUi.Hint("Turn off every Temp entry, and turn back on kept-on entries that were paused for them.");
+
+        status.Draw();
 
         ImGui.Spacing();
         RebuildFavoriteCacheIfNeeded();
@@ -134,60 +134,11 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.PushID($"fav_{mod.Id}");
 
-        bool isEnabled = false;
-        bool modExists = plugin.PenumbraOptionSetter.ModStates.TryGetValue(mod.ModName, out var state);
-
-        if (modExists)
-        {
-            if (!string.IsNullOrEmpty(mod.OptionName))
-            {
-                isEnabled = state.Settings != null && state.Settings.TryGetValue(mod.GroupName, out var list) && list.Contains(mod.OptionName);
-            }
-            else
-            {
-                isEnabled = state.Enabled;
-            }
-        }
-        else
-        {
-            isEnabled = mod.IsEnabled;
-        }
-
-        if (ImGui.Checkbox("##enabled", ref isEnabled))
-        {
-            if (!plugin.TryToggleFavorites(mod, isEnabled))
-                isEnabled = !isEnabled;
-        }
-
-        if (ImGui.IsItemHovered())
-        {
-            if (!string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single)
-            {
-                ImGui.SetTooltip("Enable this in the target Penumbra collection.\nSingle-select option: ticking selects it. It cannot be unticked - enable a different option from the same group instead.");
-            }
-            else
-            {
-                ImGui.SetTooltip("Enable or disable this in the target Penumbra collection.");
-            }
-        }
-
-        if (mod.IsAnimation)
-        {
-            ImGui.SameLine();
-            if (ImGuiComponents.IconButton(FontAwesomeIcon.Play))
-            {
-                if (!isEnabled)
-                    plugin.TryToggleFavorites(mod, true);
-
-                if (!string.IsNullOrWhiteSpace(mod.AnimationCommand))
-                    plugin.SendAnimationCommand(mod.AnimationCommand);
-            }
-            ManagedModListUi.Hint($"Play animation: {mod.AnimationCommand}");
-        }
+        ManagedModListUi.DrawEntryControls(plugin, mod);
 
         ImGui.SameLine();
-        ManagedModListUi.DrawClippedRowLabels(mod, hideDisplayName, ManagedModListUi.FavoritesGutter);
-        ManagedModListUi.HandleLabelGroupInteraction(mod, ref statusMessage);
+        ManagedModListUi.DrawClippedRowLabels(mod, hideDisplayName, ManagedModListUi.FavoritesGutter, plugin.Entries.IsMissing(mod));
+        ManagedModListUi.HandleLabelGroupInteraction(mod, status);
 
         ImGui.SameLine(ImGui.GetContentRegionMax().X - 30);
         var starColor = mod.IsFavorite ? ImGuiColors.DalamudYellow : ImGuiColors.DalamudGrey;

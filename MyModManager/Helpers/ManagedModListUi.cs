@@ -1,7 +1,12 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Colors;
+using Dalamud.Interface.Components;
+using Dalamud.Interface.Utility.Raii;
 using System;
 using System.Collections.Generic;
 using MyModManager.Models;
+using Penumbra.Api.Enums;
 
 namespace MyModManager.Helpers;
 
@@ -12,9 +17,51 @@ public static class ManagedModListUi
 
     public static void Hint(string text)
     {
-        if (ImGui.IsItemHovered())
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(text);
     }
+
+    /// <summary>
+    /// The on/off checkbox and Play button shared by both windows. State comes from Penumbra;
+    /// entries whose mod is uninstalled are shown but can't be toggled.
+    /// </summary>
+    public static void DrawEntryControls(Plugin plugin, ManagedMod mod)
+    {
+        var missing = plugin.Entries.IsMissing(mod);
+        var isOn = plugin.Entries.IsOn(mod) ?? false;
+        var canAct = plugin.Penumbra.Available && !missing;
+
+        using (ImRaii.Disabled(!canAct))
+        {
+            if (ImGui.Checkbox("##enabled", ref isOn))
+                plugin.Entries.Apply(plugin.Entries.ResolveShortcutGroup(mod), isOn);
+        }
+
+        if (missing)
+            Hint($"\"{mod.ModName}\" is not installed in Penumbra.");
+        else if (!plugin.Penumbra.Available)
+            Hint("Penumbra isn't available.");
+        else if (!string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single)
+            Hint("Turn this option on or off. Turning it off selects the group's \"None\" option, if it has one.");
+        else
+            Hint("Turn this on or off in Penumbra.");
+
+        if (!mod.IsAnimation)
+            return;
+
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!canAct || plugin.Player.IsBusy))
+        {
+            if (ImGuiComponents.IconButton(FontAwesomeIcon.Play))
+                plugin.Player.Play(mod);
+        }
+        Hint(string.IsNullOrWhiteSpace(mod.AnimationCommand)
+            ? "Turn on (this entry has no emote command)."
+            : $"Turn on and play {FormatCommand(mod)}.");
+    }
+
+    public static string FormatCommand(ManagedMod mod) =>
+        mod.Pose > 0 ? $"{mod.AnimationCommand} · pose {mod.Pose}" : mod.AnimationCommand;
 
     public static string FormatPenumbraPath(ManagedMod mod)
     {
@@ -39,7 +86,7 @@ public static class ManagedModListUi
         return string.Join("\n", lines);
     }
 
-    public static void HandleLabelGroupInteraction(ManagedMod mod, ref string? status)
+    public static void HandleLabelGroupInteraction(ManagedMod mod, StatusLine status)
     {
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(FormatPenumbraTooltip(mod));
@@ -47,11 +94,26 @@ public static class ManagedModListUi
         if (ImGui.IsItemClicked(ImGuiMouseButton.Right))
         {
             ImGui.SetClipboardText(FormatPenumbraPath(mod));
-            status = "Copied Penumbra path.";
+            status.Set("Copied Penumbra path.");
         }
     }
 
-    public static void DrawClippedRowLabels(ManagedMod mod, bool hideDisplayName, float gutter)
+    /// <summary>A warning line when Penumbra is missing, or when a chosen collection was deleted.</summary>
+    public static void DrawPenumbraBanner(Plugin plugin)
+    {
+        if (!plugin.Penumbra.Available)
+        {
+            ImGui.TextColored(ImGuiColors.DalamudOrange, "Penumbra isn't running. Entries can't be turned on or off until it is.");
+            ImGui.Spacing();
+        }
+        else if (plugin.Penumbra.TargetCollectionMissing)
+        {
+            ImGui.TextColored(ImGuiColors.DalamudOrange, $"Your chosen collection no longer exists. Using \"{plugin.Penumbra.CollectionName}\" instead.");
+            ImGui.Spacing();
+        }
+    }
+
+    public static void DrawClippedRowLabels(ManagedMod mod, bool hideDisplayName, float gutter, bool missing = false)
     {
         float labelWidth = Math.Max(24f, ImGui.GetContentRegionAvail().X - gutter);
         var clipMin = ImGui.GetCursorScreenPos();
@@ -68,7 +130,10 @@ public static class ManagedModListUi
 
         if (!hideDisplayName && !string.IsNullOrEmpty(mod.DisplayName))
         {
-            ImGui.TextUnformatted(mod.DisplayName);
+            if (missing)
+                ImGui.TextColored(ImGuiColors.DalamudOrange, mod.DisplayName);
+            else
+                ImGui.TextUnformatted(mod.DisplayName);
             wrote = true;
         }
 
@@ -82,7 +147,7 @@ public static class ManagedModListUi
         if (mod.IsAnimation && !string.IsNullOrWhiteSpace(mod.AnimationCommand))
         {
             Next();
-            ImGui.TextDisabled(mod.AnimationCommand);
+            ImGui.TextDisabled(FormatCommand(mod));
             wrote = true;
         }
 
@@ -145,5 +210,24 @@ public static class ManagedModListUi
             ImGui.EndCombo();
         }
         Hint("Filter by a scene tag assigned on Add/Edit.");
+    }
+}
+
+/// <summary>A one-line status message that clears itself after a few seconds.</summary>
+public sealed class StatusLine
+{
+    private string? text;
+    private DateTime until;
+
+    public void Set(string message, double seconds = 4)
+    {
+        text = message;
+        until = DateTime.UtcNow.AddSeconds(seconds);
+    }
+
+    public void Draw()
+    {
+        if (text != null && DateTime.UtcNow < until)
+            ImGui.TextDisabled(text);
     }
 }

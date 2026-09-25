@@ -36,4 +36,10 @@ public class ManagedMod
     public string GroupName { get; set; } = string.Empty;
     public string OptionName { get; set; } = string.Empty;
     public GroupType GroupType { get; set; } = GroupType.Single;
+
+    /// <summary>1-based pose in the /cpose cycle (1 = the emote's default); 0 when not set.</summary>
+    public int Pose { get; set; } = 0;
+
+    /// <summary>Single-choice groups only: the option selected to turn this entry off. Empty = auto-detect.</summary>
+    public string OffOption { get; set; } = string.Empty;
 }

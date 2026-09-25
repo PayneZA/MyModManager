@@ -8,6 +8,8 @@
     <IsPackable>false</IsPackable>
     <AssemblyName>MyModManager</AssemblyName>
     <RootNamespace>MyModManager</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,7 +19,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ECommons" Version="3.2.1.20" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageReference Include="Penumbra.Api" Version="5.19.1" />
   </ItemGroup>
