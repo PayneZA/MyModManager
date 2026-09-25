@@ -610,6 +610,13 @@ public class ModManagerWindow : Window, IDisposable
         ManagedModListUi.Hint("Attach the new tag to this entry.");
     }
 
+    /// <summary>Opens this window editing the given entry (used by the Library).</summary>
+    public void BeginEdit(ManagedMod mod)
+    {
+        IsOpen = true;
+        BeginEditMod(mod);
+    }
+
     private void BeginEditMod(ManagedMod mod)
     {
         editingModId = mod.Id;

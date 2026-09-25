@@ -13,7 +13,7 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/mmm";
     private const string Usage =
-        "/mmm opens Favorites · /mmm manage · /mmm on|off|toggle <shortcut> · /mmm play <shortcut or name> · /mmm temp off";
+        "/mmm opens Favorites · /mmm manage · /mmm v2 (new Library preview) · /mmm on|off|toggle <shortcut> · /mmm play <shortcut or name> · /mmm temp off";
 
     public Configuration Configuration { get; }
     public EmoteData Emotes { get; }
@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     public WindowSystem WindowSystem { get; } = new("MyModManager");
     public MainWindow MainWindow { get; }
     public ModManagerWindow ModManagerWindow { get; }
+    public LibraryWindow LibraryWindow { get; }
 
     public Plugin(IDalamudPluginInterface pluginInterface)
     {
@@ -42,8 +43,10 @@ public sealed class Plugin : IDalamudPlugin
 
         MainWindow = new MainWindow(this);
         ModManagerWindow = new ModManagerWindow(this);
+        LibraryWindow = new LibraryWindow(this);
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(ModManagerWindow);
+        WindowSystem.AddWindow(LibraryWindow);
 
         Svc.Commands.AddHandler(CommandName, new CommandInfo(OnCommand) { HelpMessage = Usage });
 
@@ -64,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
         MainWindow.Dispose();
         ModManagerWindow.Dispose();
+        LibraryWindow.Dispose();
 
         Player.Dispose();
         Penumbra.Dispose();
@@ -110,6 +114,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             case "manage":
                 ToggleManageUi();
+                return;
+
+            case "v2" or "library":
+                LibraryWindow.Toggle();
                 return;
 
             case "temp" when rest.Equals("off", StringComparison.OrdinalIgnoreCase):

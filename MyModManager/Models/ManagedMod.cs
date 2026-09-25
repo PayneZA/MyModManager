@@ -18,12 +18,26 @@ public class ManagedMod
     public string ModName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string ShortcutName { get; set; } = string.Empty;
-    public string CategoryName { get; set; } = "Default";
+    /// <summary>
+    /// The entry's folder in the Library (V1 called this "category"). Empty = use the mod's
+    /// folder in Penumbra's own mod selector.
+    /// </summary>
+    public string CategoryName { get; set; } = string.Empty;
+
+    /// <summary>Which Library tab (mod type) the entry belongs to.</summary>
+    public string ModTypeId { get; set; } = string.Empty;
+
+    /// <summary>What the entry is, from its mod type's category list, e.g. "Dance" or "Physics".</summary>
+    public string Category { get; set; } = string.Empty;
+
+    /// <summary>Animation entries: body position, e.g. "Riding" or "Ground sitting".</summary>
+    public string Position { get; set; } = string.Empty;
     public bool IsEnabled { get; set; } = false;
 
     /// <summary>Missing in older configs; default true so previously added entries stay starred.</summary>
     public bool IsFavorite { get; set; } = true;
 
+    /// <summary>Unrated means "not sorted yet".</summary>
     public ContentRating Rating { get; set; } = ContentRating.Sfw;
     public bool IsTemp { get; set; } = false;
     public List<string> Tags { get; set; } = new();
