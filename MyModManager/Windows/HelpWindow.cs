@@ -235,7 +235,7 @@ public sealed class HelpWindow : Window, IDisposable
             H("The windows"),
             Rows(("Library  (/mmm)", "Everything in your library, by tab. Search, filter, edit, play."),
                  ("Add from Penumbra  (/mmm add)", "Browse your Penumbra mods and add them, or change which mod an entry uses."),
-                 ("Help  (/mmm help)", "This guide. The ? buttons open it on the matching page.")),
+                 ("Guide  (/mmm guide)", "This guide. The ? buttons open it on the matching page. /mmm help lists the commands in chat.")),
         ]),
 
         new(HelpTopic.Library, "The Library",
@@ -342,13 +342,13 @@ public sealed class HelpWindow : Window, IDisposable
         [
             Rows(("/mmm", "Open or close the Library."),
                  ("/mmm add", "Open Add from Penumbra."),
-                 ("/mmm help", "Open this guide."),
+                 ("/mmm help", "List the commands in chat."),
+                 ("/mmm guide", "Open this guide."),
                  ("/mmm play <name or shortcut>", "Play an entry, e.g. from a macro."),
                  ("/mmm on <shortcut>", "Turn every entry with that shortcut on."),
                  ("/mmm off <shortcut>", "Turn them off."),
                  ("/mmm toggle <shortcut>", "Flip them, based on what's on in Penumbra right now."),
-                 ("/mmm temp off", "Same as Turn off temporary."),
-                 ("/mmm favorites", "The older Favorites window, until Quick Play replaces it.")),
+                 ("/mmm temp off", "Same as Turn off temporary.")),
         ]),
 
         new(HelpTopic.Settings, "Settings",

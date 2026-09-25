@@ -13,7 +13,17 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/mmm";
     private const string Usage =
-        "/mmm opens the Library · /mmm add · /mmm help · /mmm play <name or shortcut> · /mmm on|off|toggle <shortcut> · /mmm temp off · /mmm favorites";
+        "/mmm opens the Library · /mmm add · /mmm play <name or shortcut> · /mmm on|off|toggle <shortcut> · /mmm temp off · /mmm help · /mmm guide";
+
+    private static readonly (string Command, string What)[] ChatHelp =
+    [
+        ("/mmm", "open the Library"),
+        ("/mmm add", "add mods from Penumbra"),
+        ("/mmm play <name or shortcut>", "play an entry (works in macros)"),
+        ("/mmm on|off|toggle <shortcut>", "switch the entries sharing a shortcut"),
+        ("/mmm temp off", "turn off everything temporary"),
+        ("/mmm guide", "open the full guide (also the ? in the Library)"),
+    ];
 
     public Configuration Configuration { get; }
     public EmoteData Emotes { get; }
@@ -23,7 +33,6 @@ public sealed class Plugin : IDalamudPlugin
     public PlayService Player { get; }
 
     public WindowSystem WindowSystem { get; } = new("MyModManager");
-    public MainWindow MainWindow { get; }
     public LibraryWindow LibraryWindow { get; }
     public AddWindow AddWindow { get; }
     public HelpWindow HelpWindow { get; }
@@ -42,11 +51,9 @@ public sealed class Plugin : IDalamudPlugin
         Commands = new CommandSender(Emotes);
         Player = new PlayService(Configuration, Penumbra, Entries, Emotes, Commands);
 
-        MainWindow = new MainWindow(this);
         LibraryWindow = new LibraryWindow(this);
         AddWindow = new AddWindow(this);
         HelpWindow = new HelpWindow(this);
-        WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(LibraryWindow);
         WindowSystem.AddWindow(AddWindow);
         WindowSystem.AddWindow(HelpWindow);
@@ -68,7 +75,6 @@ public sealed class Plugin : IDalamudPlugin
         Svc.Commands.RemoveHandler(CommandName);
 
         WindowSystem.RemoveAllWindows();
-        MainWindow.Dispose();
         LibraryWindow.Dispose();
         AddWindow.Dispose();
         HelpWindow.Dispose();
@@ -128,11 +134,13 @@ public sealed class Plugin : IDalamudPlugin
                 return;
 
             case "help":
-                HelpWindow.Open(HelpTopic.GettingStarted);
+                Svc.Print("My Mod Manager commands:");
+                foreach (var (cmd, what) in ChatHelp)
+                    Svc.Print($"{cmd}  -  {what}");
                 return;
 
-            case "favorites" or "favourites" or "fav":
-                MainWindow.Toggle();
+            case "guide":
+                HelpWindow.Open(HelpTopic.GettingStarted);
                 return;
 
             case "temp" when rest.Equals("off", StringComparison.OrdinalIgnoreCase):

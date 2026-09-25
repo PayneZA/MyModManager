@@ -57,7 +57,13 @@ public sealed class AddWindow : Window, IDisposable
     private string? selectedDir;
     private ManagedMod? rebindTarget;
 
-    private List<KeyValuePair<string, string>> modRows = new();
+    /// <summary>A row in the mod list: a Penumbra folder divider, or a mod inside it.</summary>
+    private sealed record ModRow(bool IsFolder, string Folder, string Dir, string Name, int Count);
+
+    private List<ModRow> modRows = new();
+    private readonly HashSet<string> collapsedFolders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> folderOf = new(StringComparer.OrdinalIgnoreCase);
+    private object? folderSource;
     private string listKey = string.Empty;
 
     private string? loadedDir;
@@ -213,6 +219,7 @@ public sealed class AddWindow : Window, IDisposable
             return;
         if (modRows.Count == 0)
         {
+            // (no mods match)
             ImGui.TextDisabled(view == View.NewAnimations ? "Every animation mod is already in your library." : "No Penumbra mod matches.");
             return;
         }
@@ -226,33 +233,93 @@ public sealed class AddWindow : Window, IDisposable
             {
                 if (i < 0 || i >= modRows.Count)
                     continue;
-                var (dir, name) = modRows[i];
-                using var id = ImRaii.PushId(dir);
-                var h = ImGui.GetFrameHeight();
-                var width = ImGui.GetContentRegionAvail().X;
-                var start = ImGui.GetCursorScreenPos();
-                if (ImGui.Selectable("###mod", selectedDir == dir, ImGuiSelectableFlags.None, new Vector2(width, h)))
-                    Select(dir);
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(name);
-
-                var dl = ImGui.GetWindowDrawList();
-                var textY = start.Y + (h - ImGui.GetTextLineHeight()) / 2;
-                var right = start.X + width - Theme.Scaled(6);
-                if (managed.TryGetValue(dir, out var count))
-                {
-                    var label = count == 1 ? "added" : $"{count} added";
-                    var w = ImGui.CalcTextSize(label).X;
-                    dl.AddText(new Vector2(right - w, textY), Theme.U32(Theme.Gold), label);
-                    right -= w + Theme.Scaled(8);
-                }
-                dl.PushClipRect(start, new Vector2(Math.Max(start.X, right), start.Y + h), true);
-                dl.AddText(new Vector2(start.X + Theme.Scaled(6), textY), Theme.U32(Theme.Text), name);
-                dl.PopClipRect();
+                var row = modRows[i];
+                using var id = ImRaii.PushId(row.IsFolder ? "folder:" + row.Folder : row.Dir);
+                if (row.IsFolder)
+                    DrawFolderRow(row);
+                else
+                    DrawModRow(row, managed);
             }
         }
         clipper.End();
         clipper.Destroy();
+    }
+
+    /// <summary>A divider naming the Penumbra folder, like Penumbra's own mod selector. Click to fold.</summary>
+    private void DrawFolderRow(ModRow row)
+    {
+        var h = ImGui.GetFrameHeight();
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        var folded = search.Length == 0 && collapsedFolders.Contains(row.Folder);
+        var dl = ImGui.GetWindowDrawList();
+        dl.AddRectFilled(start, start + new Vector2(width, h), Theme.U32(Theme.Frame), Theme.Scaled(4));
+        using (ImRaii.PushColor(ImGuiCol.HeaderHovered, Theme.FrameHover).Push(ImGuiCol.HeaderActive, Theme.FrameActive))
+        {
+            if (ImGui.Selectable("###folder", false, ImGuiSelectableFlags.None, new Vector2(width, h)) && search.Length == 0)
+            {
+                if (!collapsedFolders.Add(row.Folder))
+                    collapsedFolders.Remove(row.Folder);
+                listKey = string.Empty;
+            }
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(row.Folder);
+
+        var textY = start.Y + (h - ImGui.GetTextLineHeight()) / 2;
+        var caret = (folded ? FontAwesomeIcon.CaretRight : FontAwesomeIcon.CaretDown).ToIconString();
+        dl.AddText(UiBuilder.IconFont, ImGui.GetFontSize(), new Vector2(start.X + Theme.Scaled(6), textY), Theme.U32(Theme.Dim), caret);
+        var countText = row.Count.ToString();
+        var countWidth = ImGui.CalcTextSize(countText).X;
+        var right = start.X + width - Theme.Scaled(8);
+        dl.AddText(new Vector2(right - countWidth, textY), Theme.U32(Theme.Faint), countText);
+        dl.PushClipRect(start, new Vector2(right - countWidth - Theme.Scaled(8), start.Y + h), true);
+        dl.AddText(new Vector2(start.X + Theme.Scaled(22), textY), Theme.U32(Theme.Dim), row.Folder);
+        dl.PopClipRect();
+    }
+
+    private void DrawModRow(ModRow row, Dictionary<string, int> managed)
+    {
+        var h = ImGui.GetFrameHeight();
+        var width = ImGui.GetContentRegionAvail().X;
+        var start = ImGui.GetCursorScreenPos();
+        if (ImGui.Selectable("###mod", selectedDir == row.Dir, ImGuiSelectableFlags.None, new Vector2(width, h)))
+            Select(row.Dir);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(row.Name);
+
+        var dl = ImGui.GetWindowDrawList();
+        var textY = start.Y + (h - ImGui.GetTextLineHeight()) / 2;
+        var right = start.X + width - Theme.Scaled(6);
+        if (managed.TryGetValue(row.Dir, out var count))
+        {
+            var label = count == 1 ? "added" : $"{count} added";
+            var w = ImGui.CalcTextSize(label).X;
+            dl.AddText(new Vector2(right - w, textY), Theme.U32(Theme.Gold), label);
+            right -= w + Theme.Scaled(8);
+        }
+        var indent = Theme.Scaled(22);
+        dl.PushClipRect(start, new Vector2(Math.Max(start.X, right), start.Y + h), true);
+        dl.AddText(new Vector2(start.X + indent, textY), Theme.U32(Theme.Text), row.Name);
+        dl.PopClipRect();
+    }
+
+    /// <summary>The mod's folder in Penumbra's selector, cached until Penumbra's mod list changes.</summary>
+    private string FolderOf(string dir)
+    {
+        if (!ReferenceEquals(folderSource, plugin.Penumbra.ModList))
+        {
+            folderOf.Clear();
+            folderSource = plugin.Penumbra.ModList;
+        }
+        if (folderOf.TryGetValue(dir, out var folder))
+            return folder;
+
+        var path = plugin.Penumbra.GetSelectorPath(dir);
+        var slash = path?.LastIndexOf('/') ?? -1;
+        folder = slash > 0 ? path![..slash] : "(no folder)";
+        folderOf[dir] = folder;
+        return folder;
     }
 
     private void RebuildModRows()
@@ -270,8 +337,21 @@ public sealed class AddWindow : Window, IDisposable
         else if (hideAdded)
             mods = mods.Where(m => !managed.Contains(m.Key));
         if (words.Length > 0)
-            mods = mods.Where(m => words.All(w => m.Value.Contains(w, StringComparison.OrdinalIgnoreCase) || m.Key.Contains(w, StringComparison.OrdinalIgnoreCase)));
-        modRows = mods.OrderBy(m => m.Value, StringComparer.OrdinalIgnoreCase).ToList();
+            mods = mods.Where(m => words.All(w => m.Value.Contains(w, StringComparison.OrdinalIgnoreCase)
+                                                  || m.Key.Contains(w, StringComparison.OrdinalIgnoreCase)
+                                                  || FolderOf(m.Key).Contains(w, StringComparison.OrdinalIgnoreCase)));
+
+        // Grouped by Penumbra folder, folders in path order, mods by name within each.
+        modRows = new List<ModRow>();
+        foreach (var folder in mods.GroupBy(m => FolderOf(m.Key), StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(g => g.Key == "(no folder)" ? "\uffff" : g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var inFolder = folder.OrderBy(m => m.Value, StringComparer.OrdinalIgnoreCase).ToList();
+            modRows.Add(new ModRow(true, folder.Key, string.Empty, string.Empty, inFolder.Count));
+            if (words.Length == 0 && collapsedFolders.Contains(folder.Key))
+                continue;
+            modRows.AddRange(inFolder.Select(m => new ModRow(false, folder.Key, m.Key, m.Value, 0)));
+        }
     }
 
     private void Select(string dir, bool force = false)
