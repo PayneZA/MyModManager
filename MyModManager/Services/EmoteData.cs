@@ -28,7 +28,10 @@ public sealed class EmoteInfo
 
     public PoseKind PoseKind { get; init; }
 
-    /// <summary>Number of poses including the default one; 0 when the emote has no pose variants.</summary>
+    /// <summary>
+    /// Number of poses including the default one; 0 when the emote has no pose variants.
+    /// Pose numbers run 0 (default) to PoseCount - 1, matching mod names like "Sit1".
+    /// </summary>
     public int PoseCount { get; internal set; }
 }
 
@@ -99,7 +102,7 @@ public sealed class EmoteData
             {
                 var key = timeline.ValueNullable?.Key.ExtractText();
                 if (!string.IsNullOrEmpty(key))
-                    byTimelineKey.TryAdd(key, (info, kind == PoseKind.None ? 0 : 1));
+                    byTimelineKey.TryAdd(key, (info, 0));
             }
         }
 
@@ -108,8 +111,9 @@ public sealed class EmoteData
     }
 
     /// <summary>
-    /// Maps pose timelines (e.g. "emote/j_pose02_loop") to their emote and 1-based pose number,
-    /// where pose 1 is the emote's default. Pose counts come from the same data.
+    /// Maps pose timelines (e.g. "emote/j_pose02_loop") to their emote and pose number.
+    /// File numbers are the numbers mod authors use: s_pose01 is "Sit1", and the unnumbered
+    /// default is pose 0. Pose counts come from the same data.
     /// </summary>
     private void IndexPoseTimelines(IDataManager data)
     {
@@ -140,17 +144,15 @@ public sealed class EmoteData
                 if (emote == null)
                     continue;
 
-                // s_pose01 is the first alternate pose, so it is pose 2 in the /cpose cycle.
-                var pose = fileIndex + 1;
-                byTimelineKey.TryAdd(key, (emote, pose));
-                maxPose[emoteId] = Math.Max(maxPose.GetValueOrDefault(emoteId, 1), pose);
+                byTimelineKey.TryAdd(key, (emote, fileIndex));
+                maxPose[emoteId] = Math.Max(maxPose.GetValueOrDefault(emoteId, 0), fileIndex);
             }
         }
 
         foreach (var emote in All)
         {
-            if (maxPose.TryGetValue(emote.Id, out var count))
-                emote.PoseCount = count;
+            if (maxPose.TryGetValue(emote.Id, out var highest))
+                emote.PoseCount = highest + 1;
         }
     }
 

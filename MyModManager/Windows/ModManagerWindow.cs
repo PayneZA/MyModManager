@@ -34,7 +34,7 @@ public class ModManagerWindow : Window, IDisposable
     private FavoriteFilter favoriteFilter = FavoriteFilter.All;
     private ContentRatingFilter ratingFilter = ContentRatingFilter.All;
     private string sceneTagFilter = FavoriteGrouping.SceneTagAll;
-    private int newModPose = 0;
+    private int? newModPose;
     private string cachedModSearch = "\0";
     private int cachedModSearchVersion = -1;
     private List<KeyValuePair<string, string>> filteredPenumbraMods = new();
@@ -500,7 +500,7 @@ public class ModManagerWindow : Window, IDisposable
                     target.Tags = newModTags.ToList();
                     plugin.Configuration.RememberTags(target.Tags);
                     target.AnimationCommand = newModAnimationCommand.Trim();
-                    target.Pose = newModIsAnimation ? newModPose : 0;
+                    target.PoseNumber = newModIsAnimation ? newModPose : null;
                     target.GroupName = selectedGroupName;
                     target.OptionName = selectedOptionName;
                     target.GroupType = selectedGroupType;
@@ -538,7 +538,7 @@ public class ModManagerWindow : Window, IDisposable
         newModTags = new List<string>();
         newTagDraft = string.Empty;
         newModAnimationCommand = string.Empty;
-        newModPose = 0;
+        newModPose = null;
         selectedGroupName = string.Empty;
         selectedOptionName = string.Empty;
         selectedGroupType = GroupType.Single;
@@ -612,7 +612,7 @@ public class ModManagerWindow : Window, IDisposable
         newModTags = (mod.Tags ?? new List<string>()).ToList();
         newTagDraft = string.Empty;
         newModAnimationCommand = mod.AnimationCommand;
-        newModPose = mod.Pose;
+        newModPose = mod.PoseNumber;
         selectedGroupName = mod.GroupName;
         selectedOptionName = mod.OptionName;
         selectedGroupType = mod.GroupType;
@@ -646,21 +646,20 @@ public class ModManagerWindow : Window, IDisposable
         ImGui.Text("Pose:");
         ImGui.NextColumn();
         ImGui.SetNextItemWidth(200);
-        var preview = newModPose == 0 ? "Any pose" : newModPose == 1 ? "Pose 1 (default)" : $"Pose {newModPose}";
-        using (var combo = ImRaii.Combo("##pose", preview))
+        using (var combo = ImRaii.Combo("##pose", ManagedModListUi.PoseLabel(newModPose)))
         {
             if (combo.Success)
             {
-                if (ImGui.Selectable("Any pose", newModPose == 0))
-                    newModPose = 0;
-                for (var pose = 1; pose <= poseEmote.PoseCount; pose++)
+                if (ImGui.Selectable(ManagedModListUi.PoseLabel(null), newModPose == null))
+                    newModPose = null;
+                for (var pose = 0; pose < poseEmote.PoseCount; pose++)
                 {
-                    if (ImGui.Selectable(pose == 1 ? "Pose 1 (default)" : $"Pose {pose}", newModPose == pose))
+                    if (ImGui.Selectable(ManagedModListUi.PoseLabel(pose), newModPose == pose))
                         newModPose = pose;
                 }
             }
         }
-        ManagedModListUi.Hint($"Which {poseEmote.Command} pose this animation replaces. Play selects it for you, like pressing /cpose until it appears.");
+        ManagedModListUi.Hint($"Which {poseEmote.Command} pose this animation replaces, numbered like mod names:\n\"[Sit1]\" or \"[Gsit1]\" is Pose 1. Play selects it for you.");
         ImGui.NextColumn();
     }
 

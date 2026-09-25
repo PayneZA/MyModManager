@@ -37,8 +37,17 @@ public class ManagedMod
     public string OptionName { get; set; } = string.Empty;
     public GroupType GroupType { get; set; } = GroupType.Single;
 
-    /// <summary>1-based pose in the /cpose cycle (1 = the emote's default); 0 when not set.</summary>
+    /// <summary>
+    /// Which pose of sit / ground sit / doze this entry replaces, numbered the way mod names
+    /// do ("Sit1", "Gsit2"): 0 is the default pose, 1 the first alternate. Null = any pose.
+    /// Equals the game's selected-pose index.
+    /// </summary>
+    public int? PoseNumber { get; set; }
+
+    /// <summary>Early V2 dev builds stored the pose 1-based (1 = default). Migrated to <see cref="PoseNumber"/>.</summary>
     public int Pose { get; set; } = 0;
+
+    public bool ShouldSerializePose() => false;
 
     /// <summary>Single-choice groups only: the option selected to turn this entry off. Empty = auto-detect.</summary>
     public string OffOption { get; set; } = string.Empty;

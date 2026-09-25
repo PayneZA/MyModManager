@@ -113,13 +113,13 @@ public sealed class PlayService : IDisposable
             return;
 
         var emote = emotes.FromCommand(command);
-        if (emote is { PoseKind: not PoseKind.None } && mod.Pose > 0 && config.AutoPose)
+        if (emote is { PoseKind: not PoseKind.None } && mod.PoseNumber is { } pose && config.AutoPose)
         {
             // Re-sending /groundsit while already on the ground stands the character up,
             // so cycle with /cpose instead when already in that pose family.
-            if (TryCyclePoseInPlace(emote, mod.Pose))
+            if (TryCyclePoseInPlace(emote, pose))
                 return;
-            SelectPose(emote, mod.Pose);
+            SelectPose(emote, pose);
         }
 
         if (emote != null && config.SilentEmotes && !command.Contains(" motion", StringComparison.OrdinalIgnoreCase))
@@ -152,14 +152,10 @@ public sealed class PlayService : IDisposable
             return false;
 
         var available = EmoteController.GetAvailablePoses(type);
-        var target = pose - 1;
-        if (available == 0 || target >= available)
-        {
-            Svc.PrintError($"{emote.Command} has {available} poses on this character; pose {pose} isn't available.");
+        if (!PoseAvailable(emote, pose, available))
             return true;
-        }
 
-        var steps = (target - controller.CPoseState + available) % available;
+        var steps = (pose - controller.CPoseState + available) % available;
         for (var i = 0; i < steps; i++)
             queuedCommands.Enqueue("/cpose");
         return true;
@@ -174,12 +170,18 @@ public sealed class PlayService : IDisposable
 
         var type = (EmoteController.PoseType)emote.PoseKind;
         var available = EmoteController.GetAvailablePoses(type);
-        if (available == 0 || pose - 1 >= available)
-        {
-            Svc.PrintError($"{emote.Command} has {available} poses on this character; pose {pose} isn't available.");
+        if (!PoseAvailable(emote, pose, available))
             return;
-        }
 
-        state->SelectedPoses[(int)type] = (byte)(pose - 1);
+        state->SelectedPoses[(int)type] = (byte)pose;
+    }
+
+    private static bool PoseAvailable(EmoteInfo emote, int pose, int available)
+    {
+        if (available > 0 && pose < available)
+            return true;
+
+        Svc.PrintError($"{emote.Command} has poses 0 to {Math.Max(0, available - 1)} on this character; pose {pose} isn't one of them.");
+        return false;
     }
 }

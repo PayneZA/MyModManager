@@ -193,7 +193,7 @@ public sealed class EntryService
                 continue;
             if (emotes.FromCommand(rival.AnimationCommand)?.Id != emote.Id)
                 continue;
-            if (playing.Pose > 0 && rival.Pose > 0 && playing.Pose != rival.Pose)
+            if (playing.PoseNumber is { } a && rival.PoseNumber is { } b && a != b)
                 continue;
             // Penumbra already swaps options within one single-choice group.
             if (rival.ModName == playing.ModName && rival.GroupName == playing.GroupName && rival.GroupType == GroupType.Single

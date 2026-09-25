@@ -44,11 +44,14 @@ namespace MyModManager
         public void Initialize(IDalamudPluginInterface pluginInterface)
         {
             this.pluginInterface = pluginInterface;
-            Normalize();
+            if (Normalize())
+                Save();
         }
 
-        public void Normalize()
+        /// <summary>Fills gaps and applies data migrations. Returns true when anything was migrated.</summary>
+        public bool Normalize()
         {
+            var migrated = false;
             ManagedMods ??= new List<ManagedMod>();
             KnownTags ??= new List<string>();
             SuspendedIds ??= new List<string>();
@@ -63,7 +66,13 @@ namespace MyModManager
                 m.GroupName ??= string.Empty;
                 m.OptionName ??= string.Empty;
                 m.OffOption ??= string.Empty;
-                if (m.Pose < 0) m.Pose = 0;
+                if (m.Pose > 0)
+                {
+                    m.PoseNumber ??= m.Pose - 1;
+                    m.Pose = 0;
+                    migrated = true;
+                }
+                if (m.PoseNumber < 0) m.PoseNumber = null;
                 if (string.IsNullOrEmpty(m.CategoryName)) m.CategoryName = "Default";
                 m.Tags ??= new List<string>();
                 m.Tags = m.Tags
@@ -74,6 +83,7 @@ namespace MyModManager
             }
 
             RebuildAssignedTags();
+            return migrated;
         }
 
         /// <summary>KnownTags is only names still used on at least one managed entry.</summary>

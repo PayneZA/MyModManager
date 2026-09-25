@@ -60,8 +60,19 @@ public static class ManagedModListUi
             : $"Turn on and play {FormatCommand(mod)}.");
     }
 
-    public static string FormatCommand(ManagedMod mod) =>
-        mod.Pose > 0 ? $"{mod.AnimationCommand} · pose {mod.Pose}" : mod.AnimationCommand;
+    public static string FormatCommand(ManagedMod mod) => mod.PoseNumber switch
+    {
+        null => mod.AnimationCommand,
+        0 => $"{mod.AnimationCommand} · default pose",
+        var n => $"{mod.AnimationCommand} · pose {n}",
+    };
+
+    public static string PoseLabel(int? pose) => pose switch
+    {
+        null => "Any pose",
+        0 => "Default pose",
+        var n => $"Pose {n}",
+    };
 
     public static string FormatPenumbraPath(ManagedMod mod)
     {
