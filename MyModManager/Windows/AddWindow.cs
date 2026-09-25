@@ -71,6 +71,11 @@ public sealed class AddWindow : Window, IDisposable
     private readonly Dictionary<string, bool> openSections = new(StringComparer.Ordinal);
     private Candidate? editingCommand;
     private bool openCommandPopup;
+    private (float Check, float Label, float Plays, float Try, float Name) columns;
+
+    /// <summary>What "Try" turned on, and the mod's settings before, so Undo can restore them exactly.</summary>
+    private sealed record TrySession(string Dir, string Label, string Group, GroupType Type, ModState? Before);
+    private TrySession? trying;
 
     private const string ModSection = "\u0001mod";
 
@@ -120,7 +125,12 @@ public sealed class AddWindow : Window, IDisposable
         IsOpen = true;
     }
 
-    public override void OnClose() => rebindTarget = null;
+    public override void OnClose()
+    {
+        rebindTarget = null;
+        // "Try" promises nothing is added, so closing puts a tried mod back.
+        UndoTry();
+    }
 
     public override void Draw()
     {
@@ -398,6 +408,15 @@ public sealed class AddWindow : Window, IDisposable
 
         ImGui.Spacing();
         DrawSummary();
+        DrawTryBar();
+
+        var listWidth = ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ScrollbarSize;
+        var check = rebindTarget != null ? Theme.ButtonWidth("Use") : ImGui.GetFrameHeight() * 1.6f;
+        var playsWidth = Math.Max(Theme.Scaled(180), listWidth * 0.2f);
+        var tryWidth = ImGui.GetFrameHeight() * 1.6f;
+        var rest = Math.Max(Theme.Scaled(200), listWidth - check - playsWidth - tryWidth - ImGui.GetStyle().CellPadding.X * 10);
+        columns = (check, rest * 0.55f, playsWidth, tryWidth, rest * 0.45f);
+        DrawColumnHeaders();
 
         var settingsHeight = rebindTarget == null ? ImGui.GetFrameHeightWithSpacing() * 5 + Theme.Scaled(16) : 0;
         using (var table = ImRaii.Child("###candidates", new Vector2(0, -settingsHeight), false))
@@ -471,11 +490,6 @@ public sealed class AddWindow : Window, IDisposable
             return;
         }
 
-        var avail = ImGui.GetContentRegionAvail().X;
-        var check = rebindTarget != null ? Theme.ButtonWidth("Use") : ImGui.GetFrameHeight();
-        var plays = Math.Max(Theme.Scaled(170), avail * 0.2f);
-        var rest = Math.Max(Theme.Scaled(200), avail - check - plays - ImGui.GetStyle().CellPadding.X * 8);
-        var widths = (check, rest * 0.58f, plays, rest * 0.42f);
 
         var sectionIndex = 0;
         foreach (var section in visible.GroupBy(SectionKey))
@@ -485,13 +499,10 @@ public sealed class AddWindow : Window, IDisposable
             if (!DrawSectionHeader(section.Key, section.First(), all))
                 continue;
 
-            using var table = ImRaii.Table("###rows", 4, ImGuiTableFlags.PadOuterX);
+            using var table = ImRaii.Table("###rows", 5, ImGuiTableFlags.PadOuterX);
             if (!table)
                 continue;
-            ImGui.TableSetupColumn("###inc", ImGuiTableColumnFlags.WidthFixed, widths.check);
-            ImGui.TableSetupColumn("###label", ImGuiTableColumnFlags.WidthFixed, widths.Item2);
-            ImGui.TableSetupColumn("###plays", ImGuiTableColumnFlags.WidthFixed, widths.plays);
-            ImGui.TableSetupColumn("###name", ImGuiTableColumnFlags.WidthFixed, widths.Item4);
+            SetupColumns();
 
             var rowIndex = 0;
             foreach (var c in section)
@@ -619,9 +630,124 @@ public sealed class AddWindow : Window, IDisposable
         DrawPlaysButton(c);
 
         ImGui.TableNextColumn();
+        using (ImRaii.Disabled(!plugin.Penumbra.Available || plugin.Player.IsBusy))
+        {
+            if (Theme.IconButton(FontAwesomeIcon.Play, "try", c.Command.Length > 0
+                    ? $"Try it: turns this on in Penumbra and plays {CommandText(c.Command, c.Pose)} on your character. Nothing is added."
+                    : "Try it: turns this on in Penumbra. Nothing is added."))
+                Try(c);
+        }
+
+        ImGui.TableNextColumn();
         ImGui.SetNextItemWidth(-1);
         using (ImRaii.Disabled(c.InLibrary || rebindTarget != null))
+        using (ImRaii.PushStyle(ImGuiStyleVar.FrameBorderSize, 1f).Push(ImGuiStyleVar.FrameRounding, Theme.Scaled(4)))
+        using (ImRaii.PushColor(ImGuiCol.Border, Theme.Border).Push(ImGuiCol.FrameBg, Theme.WindowBg))
             ImGui.InputText("###name", ref c.Name, 120);
+        Theme.Hint("The entry's name in your library. Click to change it.");
+    }
+
+    private void SetupColumns()
+    {
+        ImGui.TableSetupColumn(rebindTarget != null ? "Use" : "Add", ImGuiTableColumnFlags.WidthFixed, columns.Check);
+        ImGui.TableSetupColumn("In Penumbra", ImGuiTableColumnFlags.WidthFixed, columns.Label);
+        ImGui.TableSetupColumn("Plays  (click to change)", ImGuiTableColumnFlags.WidthFixed, columns.Plays);
+        ImGui.TableSetupColumn("Try", ImGuiTableColumnFlags.WidthFixed, columns.Try);
+        ImGui.TableSetupColumn("Name in your library  (click to edit)", ImGuiTableColumnFlags.WidthFixed, columns.Name);
+    }
+
+    /// <summary>Column titles, drawn once above the scrolling list so they stay visible.</summary>
+    private void DrawColumnHeaders()
+    {
+        using var table = ImRaii.Table("###headers", 5, ImGuiTableFlags.PadOuterX);
+        if (!table)
+            return;
+        SetupColumns();
+        using (ImRaii.PushColor(ImGuiCol.TableHeaderBg, Vector4.Zero).Push(ImGuiCol.Text, Theme.Dim))
+            ImGui.TableHeadersRow();
+    }
+
+    // ------------------------------------------------------------------ try before adding
+
+    private void DrawTryBar()
+    {
+        if (trying == null)
+            return;
+        using (ImRaii.PushColor(ImGuiCol.ChildBg, Theme.UnsortedBg))
+        using (var bar = ImRaii.Child("###tryBar", new Vector2(0, ImGui.GetFrameHeightWithSpacing() + Theme.Scaled(8)), true))
+        {
+            if (!bar)
+                return;
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Unsorted, $"Trying “{trying.Label}”. It's on in Penumbra but not added.");
+            ImGui.SameLine();
+            Theme.RightAlign(Theme.ButtonWidth("Undo try"));
+            if (ImGui.Button("Undo try"))
+                UndoTry();
+            Theme.Hint("Put the mod's Penumbra settings back to how they were before you tried it.");
+        }
+    }
+
+    private void Try(Candidate c)
+    {
+        if (selectedDir == null)
+            return;
+
+        // Keep the original "before" when trying several rows of the same mod in a row.
+        var before = trying?.Dir == selectedDir ? trying.Before : plugin.Penumbra.ReadSettings(selectedDir);
+        if (trying != null && trying.Dir != selectedDir)
+            UndoTry();
+
+        var temp = new ManagedMod
+        {
+            ModName = selectedDir,
+            DisplayName = c.Name.Trim().Length > 0 ? c.Name.Trim() : c.Label,
+            GroupName = c.Group,
+            OptionName = c.Option,
+            GroupType = c.Type,
+            AnimationCommand = c.Command.Trim(),
+            PoseNumber = c.Pose,
+            IsAnimation = c.Command.Trim().Length > 0,
+            IsTemp = true,
+            AutoEmoteSync = autoSync && c.Command.Trim().Length > 0,
+        };
+        trying = new TrySession(selectedDir, temp.DisplayName, c.Group, c.Type, before);
+
+        if (temp.IsAnimation)
+            plugin.Player.Play(temp);
+        else
+            plugin.Entries.Apply([temp], true);
+    }
+
+    private void UndoTry()
+    {
+        var session = trying;
+        trying = null;
+        if (session == null)
+            return;
+
+        var penumbra = plugin.Penumbra;
+        var before = session.Before;
+        if (before == null)
+        {
+            penumbra.SetModEnabled(session.Dir, false);
+        }
+        else
+        {
+            if (session.Group.Length > 0)
+            {
+                var previous = before.Settings.TryGetValue(session.Group, out var list) ? list : new List<string>();
+                if (session.Type == GroupType.Multi)
+                    penumbra.SetMultiOptions(session.Dir, session.Group, previous);
+                else if (previous.Count > 0)
+                    penumbra.SetSingleOption(session.Dir, session.Group, previous[0]);
+            }
+            penumbra.SetModEnabled(session.Dir, before.Enabled);
+        }
+
+        if (Config.RedrawAfterChange)
+            penumbra.RedrawPlayer();
+        status.Set($"Put {plugin.Penumbra.ModList.GetValueOrDefault(session.Dir, session.Dir)} back the way it was.");
     }
 
     /// <summary>The command a row plays, as a gold button; clicking it edits command and pose.</summary>
@@ -636,6 +762,15 @@ public sealed class AddWindow : Window, IDisposable
                 editingCommand = c;
                 openCommandPopup = true;
             }
+        }
+
+        if (rebindTarget == null && !c.InLibrary)
+        {
+            var max = ImGui.GetItemRectMax();
+            var iconSize = ImGui.GetFontSize() * 0.75f;
+            ImGui.GetWindowDrawList().AddText(UiBuilder.IconFont, iconSize,
+                new Vector2(max.X - iconSize - Theme.Scaled(6), max.Y - (ImGui.GetFrameHeight() + iconSize) / 2),
+                Theme.U32(Theme.Dim), FontAwesomeIcon.Pen.ToIconString());
         }
         if (c.Source == DetectionSource.Name)
             Theme.Hint("Guessed from the name, not the files. Click to change.");
@@ -1007,6 +1142,8 @@ public sealed class AddWindow : Window, IDisposable
 
         Config.ManagedMods.AddRange(created);
         Config.Save();
+        if (trying?.Dir == dir)
+            trying = null; // it's in the library now; keep it as it is
         foreach (var c in candidates.Where(c => c.Include))
         {
             c.Include = false;

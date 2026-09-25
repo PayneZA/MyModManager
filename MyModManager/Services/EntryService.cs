@@ -136,10 +136,13 @@ public sealed class EntryService
             OffOptionNames.Any(n => o.Trim().Equals(n, StringComparison.OrdinalIgnoreCase)));
     }
 
-    private List<string> CurrentSelection(ManagedMod mod) =>
-        penumbra.TryGetState(mod.ModName, out var state) && state != null && state.Settings.TryGetValue(mod.GroupName, out var list)
-            ? [.. list]
-            : [];
+    private List<string> CurrentSelection(ManagedMod mod)
+    {
+        // Managed mods have cached state; anything else (e.g. trying a mod before adding it)
+        // is read live so the group's other enabled options are kept.
+        var state = penumbra.TryGetState(mod.ModName, out var cached) ? cached : penumbra.ReadSettings(mod.ModName);
+        return state != null && state.Settings.TryGetValue(mod.GroupName, out var list) ? [.. list] : [];
+    }
 
     private static ToggleOutcome Result(bool ok) => ok ? ToggleOutcome.Changed : ToggleOutcome.Failed;
 
