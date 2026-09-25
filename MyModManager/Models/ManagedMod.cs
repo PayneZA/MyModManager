@@ -1,7 +1,15 @@
 using Penumbra.Api.Enums;
 using System;
+using System.Collections.Generic;
 
 namespace MyModManager.Models;
+
+public enum ContentRating
+{
+    Sfw,
+    Nsfw,
+    Unrated
+}
 
 [Serializable]
 public class ManagedMod
@@ -12,6 +20,13 @@ public class ManagedMod
     public string ShortcutName { get; set; } = string.Empty;
     public string CategoryName { get; set; } = "Default";
     public bool IsEnabled { get; set; } = false;
+
+    /// <summary>Missing in older configs; default true so previously added entries stay starred.</summary>
+    public bool IsFavorite { get; set; } = true;
+
+    public ContentRating Rating { get; set; } = ContentRating.Sfw;
+    public bool IsTemp { get; set; } = false;
+    public List<string> Tags { get; set; } = new();
 
     // Animation specific fields
     public bool IsAnimation { get; set; } = false;

@@ -6,12 +6,12 @@ using ECommons;
 using ECommons.Automation;
 using ECommons.DalamudServices;
 using MyModManager.Helpers;
+using MyModManager.Models;
 using MyModManager.Windows;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Penumbra.Api.Enums;
-using Dalamud.Game.Text;
-using Dalamud.Game.Text.SeStringHandling;
 
 namespace MyModManager;
 
@@ -47,7 +47,7 @@ public class Plugin : IDalamudPlugin
 
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Usage: /mmm (open favorites) | /mmm manage (open config) | /mmm [on|off|toggle] <shortcut>"
+            HelpMessage = "Usage: /mmm (favorites) | /mmm manage (add/edit) | /mmm [on|off|toggle] <shortcut> | /mmm temp off"
         });
 
         Interface.UiBuilder.Draw += WindowSystem.Draw;
@@ -57,12 +57,14 @@ public class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
-        ECommonsMain.Dispose();
-        CommandManager.RemoveHandler(CommandName);
         Interface.UiBuilder.Draw -= WindowSystem.Draw;
         Interface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
         Interface.UiBuilder.OpenMainUi -= ToggleMainUi;
         WindowSystem.RemoveAllWindows();
+        MainWindow.Dispose();
+        ModManagerWindow.Dispose();
+        CommandManager.RemoveHandler(CommandName);
+        ECommonsMain.Dispose();
     }
 
     private void OnCommand(string command, string args)
@@ -82,13 +84,25 @@ public class Plugin : IDalamudPlugin
             return;
         }
 
+        if (action == "temp")
+        {
+            if (argList.Length >= 2 && argList[1].Equals("off", StringComparison.OrdinalIgnoreCase))
+            {
+                DisableAllTempMods();
+                return;
+            }
+
+            Svc.Chat.Print("[MMM] Usage: /mmm temp off");
+            return;
+        }
+
         if ((action == "on" || action == "off" || action == "toggle") && argList.Length >= 2)
         {
             var shortcutName = string.Join(" ", argList.Skip(1));
 
             // Mods sharing a shortcut name toggle together, matching the UI checkbox behavior.
             var mods = Configuration.ManagedMods
-                .Where(m => m.ShortcutName.Equals(shortcutName, StringComparison.OrdinalIgnoreCase))
+                .Where(m => string.Equals(m.ShortcutName, shortcutName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (mods.Count == 0)
@@ -103,45 +117,139 @@ public class Plugin : IDalamudPlugin
             {
                 "on" => true,
                 "off" => false,
-                _ => !(PenumbraOptionSetter.GetManagedModState(mods[0], Configuration.TargetCollectionId) ?? mods[0].IsEnabled)
+                _ => !MajorityCurrentlyEnabled(mods)
             };
 
-            if (!enable && mods.All(m => !string.IsNullOrEmpty(m.OptionName) && m.GroupType == GroupType.Single))
+            if (!enable && mods.All(IsSingleSelectOption))
             {
                 Svc.Chat.Print($"[MMM] '{shortcutName}' points at single-select option(s), which cannot be disabled - enable a different option from the group instead.");
                 return;
             }
 
-            int succeeded = 0;
-            foreach (var mod in mods)
-            {
-                if (PenumbraOptionSetter.SetManagedModState(mod, enable, Configuration.TargetCollectionId))
-                {
-                    mod.IsEnabled = enable;
-                    succeeded++;
-                }
-            }
-
-            if (succeeded > 0)
-            {
-                Configuration.Save();
-                PenumbraOptionSetter.RedrawPlayer();
-                MainWindow.ForceStateRefresh();
-                ModManagerWindow.ForceStateRefresh();
-
-                var label = mods.Count == 1
-                    ? mods[0].DisplayName
-                    : $"{shortcutName} ({succeeded}/{mods.Count} entries)";
-                Svc.Chat.Print($"[MMM] {label} set to {(enable ? "Enabled" : "Disabled")}");
-            }
-            else
+            if (!ApplyFavoriteStates(mods, enable))
             {
                 Svc.Chat.Print($"[MMM] Failed to toggle shortcut '{shortcutName}'. Is Penumbra running and the mod installed?");
+                return;
             }
+
+            var succeeded = mods.Count(m => m.IsEnabled == enable);
+            var label = mods.Count == 1
+                ? mods[0].DisplayName
+                : $"{shortcutName} ({succeeded}/{mods.Count} entries)";
+            Svc.Chat.Print($"[MMM] {label} set to {(enable ? "Enabled" : "Disabled")}");
             return;
         }
 
-        Svc.Chat.Print("[MMM] Usage: /mmm | /mmm manage | /mmm [on|off|toggle] <shortcut>");
+        Svc.Chat.Print("[MMM] Usage: /mmm (favorites) | /mmm manage (add/edit) | /mmm [on|off|toggle] <shortcut> | /mmm temp off");
+    }
+
+    /// <summary>
+    /// True when more members are currently on than off. Live Penumbra state is preferred;
+    /// stored IsEnabled is the fallback. Ties count as currently on so toggle turns the group off.
+    /// </summary>
+    private bool MajorityCurrentlyEnabled(List<ManagedMod> mods)
+    {
+        int enabled = 0;
+        int disabled = 0;
+        foreach (var mod in mods)
+        {
+            var live = PenumbraOptionSetter.GetManagedModState(mod, Configuration.TargetCollectionId);
+            if (live == true) enabled++;
+            else if (live == false) disabled++;
+        }
+
+        if (enabled + disabled == 0)
+        {
+            foreach (var mod in mods)
+            {
+                if (mod.IsEnabled) enabled++;
+                else disabled++;
+            }
+        }
+
+        return enabled >= disabled;
+    }
+
+    public static bool IsSingleSelectOption(ManagedMod mod) =>
+        !string.IsNullOrEmpty(mod.OptionName) && mod.GroupType == GroupType.Single;
+
+    public List<ManagedMod> ResolveShortcutGroup(ManagedMod source)
+    {
+        if (string.IsNullOrWhiteSpace(source.ShortcutName))
+            return new List<ManagedMod> { source };
+
+        return Configuration.ManagedMods
+            .Where(m => string.Equals(m.ShortcutName, source.ShortcutName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Applies an on/off change to a favorite and every other favorite sharing its shortcut.
+    /// Returns false when nothing changed (including blocked single-select disables).
+    /// </summary>
+    public bool TryToggleFavorites(ManagedMod source, bool enable)
+    {
+        var mods = ResolveShortcutGroup(source);
+        if (!enable && mods.All(IsSingleSelectOption))
+        {
+            var label = string.IsNullOrWhiteSpace(source.ShortcutName) ? source.DisplayName : source.ShortcutName;
+            Svc.Chat.Print($"[MMM] '{label}' points at single-select option(s), which cannot be disabled - enable a different option from the group instead.");
+            return false;
+        }
+
+        return ApplyFavoriteStates(mods, enable);
+    }
+
+    /// <summary>Turns off every Temp-tagged managed mod in Penumbra. Does not clear the Temp tag.</summary>
+    public void DisableAllTempMods()
+    {
+        var temps = Configuration.ManagedMods.Where(m => m.IsTemp).ToList();
+        if (temps.Count == 0)
+        {
+            Svc.Chat.Print("[MMM] No temp-tagged mods.");
+            return;
+        }
+
+        int succeeded = 0;
+        foreach (var mod in temps)
+        {
+            if (PenumbraOptionSetter.SetManagedModState(mod, false, Configuration.TargetCollectionId))
+            {
+                mod.IsEnabled = false;
+                succeeded++;
+            }
+        }
+
+        if (succeeded == 0)
+        {
+            Svc.Chat.Print("[MMM] Failed to disable temp mods. Is Penumbra running?");
+            return;
+        }
+
+        Configuration.Save();
+        PenumbraOptionSetter.RedrawPlayer();
+        PenumbraOptionSetter.ForceModStateRefresh();
+        Svc.Chat.Print($"[MMM] Disabled {succeeded} temp mod{(succeeded == 1 ? "" : "s")}.");
+    }
+
+    private bool ApplyFavoriteStates(List<ManagedMod> mods, bool enable)
+    {
+        bool anyChanged = false;
+        foreach (var mod in mods)
+        {
+            if (PenumbraOptionSetter.SetManagedModState(mod, enable, Configuration.TargetCollectionId))
+            {
+                mod.IsEnabled = enable;
+                anyChanged = true;
+            }
+        }
+
+        if (!anyChanged) return false;
+
+        Configuration.Save();
+        PenumbraOptionSetter.RedrawPlayer();
+        PenumbraOptionSetter.ForceModStateRefresh();
+        return true;
     }
 
     /// <summary>
