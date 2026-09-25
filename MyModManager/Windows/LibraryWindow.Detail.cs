@@ -154,6 +154,13 @@ public sealed partial class LibraryWindow
                 ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(96));
                 ImGui.TableSetupColumn("value", ImGuiTableColumnFlags.WidthStretch);
 
+                FieldRow("Name", () =>
+                {
+                    var name = mod.DisplayName;
+                    ImGui.SetNextItemWidth(Theme.Scaled(360));
+                    if (ImGui.InputText("###displayName", ref name, 120) && name.Trim().Length > 0)
+                        SetAll([mod], m => m.DisplayName = name);
+                });
                 FieldRow("Rating", () => RatingField([mod]));
                 FieldRow("Category", () => VocabularyCombo("category", mod.Category, type.Categories, ref newCategory, v => SetAll([mod], m => m.Category = v), v => AddCategory(type, v)));
                 if (isAnimation)

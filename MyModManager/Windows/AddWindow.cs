@@ -70,6 +70,7 @@ public sealed class AddWindow : Window, IDisposable
     private bool animationsOnly;
     private readonly Dictionary<string, bool> openSections = new(StringComparer.Ordinal);
     private Candidate? editingCommand;
+    private bool openCommandPopup;
 
     private const string ModSection = "\u0001mod";
 
@@ -633,7 +634,7 @@ public sealed class AddWindow : Window, IDisposable
             if (ImGui.Button($"{label}###plays", new Vector2(-1, 0)) && rebindTarget == null && !c.InLibrary)
             {
                 editingCommand = c;
-                ImGui.OpenPopup("###commandPopup");
+                openCommandPopup = true;
             }
         }
         if (c.Source == DetectionSource.Name)
@@ -646,6 +647,13 @@ public sealed class AddWindow : Window, IDisposable
 
     private void DrawCommandPopup()
     {
+        // Opened here rather than in the row: OpenPopup and BeginPopup must share an ID stack.
+        if (openCommandPopup)
+        {
+            openCommandPopup = false;
+            ImGui.OpenPopup("###commandPopup");
+        }
+
         using var popup = ImRaii.Popup("###commandPopup");
         if (!popup || editingCommand == null)
             return;
@@ -772,6 +780,25 @@ public sealed class AddWindow : Window, IDisposable
         var multiAnimated = optionRows.Where(c => c.Type == GroupType.Multi && c.Command.Length > 0).GroupBy(c => c.Group).Any(g => g.Count() >= 5);
         isPack = animatedOptions > 12 || multiAnimated;
 
+        // "The mod itself" lists what it plays only when that's short and meaningful. A pack's
+        // dozens of emotes are noise there; its options carry them. One animation folds into
+        // the single "whole mod" row.
+        var wholeRows = candidates.Where(c => c.WholeMod && !c.Plain).ToList();
+        if (isPack || wholeRows.Count > 4)
+        {
+            candidates.RemoveAll(c => c.WholeMod && !c.Plain);
+        }
+        else if (wholeRows.Count == 1)
+        {
+            var plain = candidates[0];
+            plain.Label = "The whole mod";
+            plain.Command = wholeRows[0].Command;
+            plain.Pose = wholeRows[0].Pose;
+            plain.Source = wholeRows[0].Source;
+            candidates.Remove(wholeRows[0]);
+            plain.InLibrary = IsInLibrary(dir, plain);
+        }
+
         // Pre-tick only the obvious: a couple mod's one or two poses, or a mod with no animations.
         var wholeAnimated = candidates.Where(c => c.WholeMod && !c.Plain).ToList();
         foreach (var c in candidates)
@@ -780,7 +807,7 @@ public sealed class AddWindow : Window, IDisposable
         {
             if (wholeAnimated.Count is > 0 and <= 2)
                 wholeAnimated.ForEach(c => c.Include = !c.InLibrary);
-            else if (wholeAnimated.Count == 0 && optionRows.Count == 0)
+            else if (wholeAnimated.Count == 0 && (candidates[0].Command.Length > 0 || optionRows.Count == 0))
                 candidates[0].Include = !candidates[0].InLibrary;
         }
 
