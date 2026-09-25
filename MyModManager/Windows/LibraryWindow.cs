@@ -697,11 +697,9 @@ public sealed partial class LibraryWindow : Window, IDisposable
         {
             var tip = ManagedModListUi.FormatPenumbraTooltip(mod).Replace("Right-click to copy.", string.Empty).TrimEnd();
             if (mod.AutoEmoteSync && isAnimation)
-                tip += "
-Purple arrows: auto emote sync (runs /heels emotesync after Play).";
+                tip += "\nPurple arrows: auto emote sync (runs /heels emotesync after Play).";
             if (isAnimation)
-                tip += "
-Double-click to play.";
+                tip += "\nDouble-click to play.";
             ImGui.SetTooltip(tip);
         }
 
