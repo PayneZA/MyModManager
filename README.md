@@ -4,7 +4,13 @@ An **animation mode for [Penumbra](https://github.com/xivdev/Penumbra)**, built 
 
 Penumbra keeps doing the work in the background. My Mod Manager keeps a library of the mods and options you care about, tells you exactly what to type to use them, and turns them on and off for you. It is made for roleplay animation mods (idles, walks, dances, sits, couples), and handles other mods too.
 
-> An **unofficial** project made for friends. Not affiliated with the Penumbra team, Dalamud, or Square Enix.
+> [!WARNING]
+> **Please read before installing.**
+>
+> - **Co-authored with AI.** This plugin was co-authored with **Claude Opus 5.5 (high effort)**. The developer does have Dalamud plugin knowledge and reviewed and tested the work in-game, but much of the code and text was written with AI assistance.
+> - **No official support.** It is made for the author and close friends. Issues and requests may not be answered.
+> - **May be discontinued at any time**, without notice.
+> - **Unofficial.** Not affiliated with the Penumbra team, Dalamud, or Square Enix.
 
 ## What it does
 
@@ -57,6 +63,10 @@ dotnet build MyModManager.sln
 ```
 
 Requires a local XIVLauncher/Dalamud dev install (the SDK resolves Dalamud assemblies from `%AppData%\XIVLauncher\addon\Hooks\dev`, or `DALAMUD_HOME`). Load `MyModManager/bin/x64/Debug/MyModManager.dll` as a Dalamud dev plugin to test in-game.
+
+## Releasing (maintainer)
+
+Bump `<Version>` in `MyModManager/MyModManager.csproj` and push to `main`. The release workflow builds the plugin, publishes a GitHub release with `latest.zip`, and updates `pluginmaster.json`, so Dalamud offers the update. Pushing without a version bump builds but publishes nothing.
 
 ## License
 

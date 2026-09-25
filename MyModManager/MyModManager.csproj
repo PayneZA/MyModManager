@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.0.0.2</Version>
-    <Description>An unofficial favorites manager for Penumbra mods - a small project made for friends, not affiliated with the Penumbra team.</Description>
+    <Version>2.0.0.0</Version>
+    <Description>An animation mode for Penumbra. Unofficial, made for the author and close friends.</Description>
+    <Authors>PayneZA</Authors>
     <PackageProjectUrl>https://github.com/PayneZA/MyModManager</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>

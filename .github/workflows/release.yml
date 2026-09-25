@@ -1,12 +1,23 @@
 name: Release
 
+# Push to main and, if the version in MyModManager.csproj (<Version>) has no release yet,
+# this builds the plugin, publishes a GitHub release with latest.zip, and updates
+# pluginmaster.json so Dalamud offers the update. No manual zipping or tagging.
+
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    paths-ignore:
+      - "pluginmaster.json"
+      - "README.md"
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -14,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -30,17 +43,46 @@ jobs:
       - name: Build (Release)
         run: dotnet build MyModManager.sln -c Release
 
-      - name: Verify manifest version matches tag
+      - name: Read version
+        id: version
         shell: pwsh
         run: |
-          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
           $manifest = Get-Content MyModManager/bin/x64/Release/MyModManager/MyModManager.json -Raw | ConvertFrom-Json
-          if ($manifest.AssemblyVersion -ne $tagVersion) {
-            Write-Error "Tag $tagVersion does not match AssemblyVersion $($manifest.AssemblyVersion). Bump the .csproj <Version>, MyModManager.json and pluginmaster.json before tagging."
-          }
+          $version = $manifest.AssemblyVersion
+          $existing = git ls-remote --tags origin "refs/tags/v$version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          if ($existing) { "exists=true" >> $env:GITHUB_OUTPUT } else { "exists=false" >> $env:GITHUB_OUTPUT }
+          if ($existing) { Write-Host "v$version is already released; nothing to publish." } else { Write-Host "Publishing v$version." }
 
-      - name: Create release with plugin zip
+      - name: Publish release
+        if: steps.version.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: My Mod Manager ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: MyModManager/bin/x64/Release/MyModManager/latest.zip
           generate_release_notes: true
+          make_latest: true
+
+      - name: Update pluginmaster.json
+        if: steps.version.outputs.exists == 'false'
+        shell: pwsh
+        run: |
+          $entry = Get-Content MyModManager/bin/x64/Release/MyModManager/MyModManager.json -Raw | ConvertFrom-Json
+          $download = "https://github.com/${{ github.repository }}/releases/download/v$($entry.AssemblyVersion)/latest.zip"
+          $entry | Add-Member -Force -NotePropertyName RepoUrl -NotePropertyValue "https://github.com/${{ github.repository }}"
+          $entry | Add-Member -Force -NotePropertyName DownloadLinkInstall -NotePropertyValue $download
+          $entry | Add-Member -Force -NotePropertyName DownloadLinkUpdate -NotePropertyValue $download
+          $entry | Add-Member -Force -NotePropertyName DownloadLinkTesting -NotePropertyValue $download
+          $entry | Add-Member -Force -NotePropertyName LastUpdate -NotePropertyValue ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+          ConvertTo-Json -InputObject @($entry) -Depth 5 | Set-Content pluginmaster.json -Encoding utf8NoBOM
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pluginmaster.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Publish v$($entry.AssemblyVersion) to the plugin repository"
+            git push origin HEAD:main
+          }
