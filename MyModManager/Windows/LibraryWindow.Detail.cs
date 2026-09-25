@@ -115,6 +115,7 @@ public sealed partial class LibraryWindow
         ImGui.Separator();
         ImGui.TextDisabled("Bar colour = rating: teal SFW, rose NSFW, amber unsorted.");
         ImGui.TextDisabled("Tick colour: green = kept on, amber = temporary.");
+        ImGui.TextDisabled("Purple arrows = auto emote sync after Play. Gold star = favourite.");
     }
 
     // ------------------------------------------------------------------ one entry

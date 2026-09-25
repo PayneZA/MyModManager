@@ -694,7 +694,16 @@ public sealed partial class LibraryWindow : Window, IDisposable
                 HandleRowClick(mod.Id);
         }
         if (hovered)
-            ImGui.SetTooltip(ManagedModListUi.FormatPenumbraTooltip(mod).Replace("Right-click to copy.", isAnimation ? "Double-click to play." : string.Empty).TrimEnd());
+        {
+            var tip = ManagedModListUi.FormatPenumbraTooltip(mod).Replace("Right-click to copy.", string.Empty).TrimEnd();
+            if (mod.AutoEmoteSync && isAnimation)
+                tip += "
+Purple arrows: auto emote sync (runs /heels emotesync after Play).";
+            if (isAnimation)
+                tip += "
+Double-click to play.";
+            ImGui.SetTooltip(tip);
+        }
 
         // Row text is drawn over the selectable so the whole middle of the row is clickable.
         var textY = min.Y + (h - ImGui.GetTextLineHeight()) / 2;
