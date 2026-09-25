@@ -195,12 +195,20 @@ public static class Theme
     public static float ButtonWidth(string label) =>
         ImGui.CalcTextSize(label.Split("##")[0]).X + ImGui.GetStyle().FramePadding.X * 2;
 
-    public static bool IconButton(Dalamud.Interface.FontAwesomeIcon icon, string id, string tooltip, Vector4? color = null)
+    /// <summary>
+    /// A square icon button exactly one frame tall, so it never makes a row taller than text
+    /// widgets (the icon font is taller than the game font). Subtle buttons have no background
+    /// until hovered.
+    /// </summary>
+    public static bool IconButton(Dalamud.Interface.FontAwesomeIcon icon, string id, string tooltip, Vector4? color = null, bool subtle = false)
     {
+        var size = IconButtonSize(icon);
         bool clicked;
+        using (ImRaii.PushColor(ImGuiCol.Button, Vector4.Zero, subtle).Push(ImGuiCol.ButtonHovered, Primary, subtle).Push(ImGuiCol.ButtonActive, PrimaryHover, subtle))
         using (ImRaii.PushFont(Dalamud.Interface.UiBuilder.IconFont))
-        using (ImRaii.PushColor(ImGuiCol.Text, color ?? Text, color.HasValue))
-            clicked = ImGui.Button($"{icon.ToIconString()}##{id}");
+        using (ImRaii.PushColor(ImGuiCol.Text, color ?? (subtle ? Faint : Text), color.HasValue || subtle))
+        using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, Vector2.Zero))
+            clicked = ImGui.Button($"{icon.ToIconString()}##{id}", size);
 
         // Tooltip text uses the normal font.
         Hint(tooltip);
@@ -209,8 +217,8 @@ public static class Theme
 
     public static Vector2 IconButtonSize(Dalamud.Interface.FontAwesomeIcon icon)
     {
-        using var font = ImRaii.PushFont(Dalamud.Interface.UiBuilder.IconFont);
-        return ImGui.CalcTextSize(icon.ToIconString()) + ImGui.GetStyle().FramePadding * 2;
+        var h = ImGui.GetFrameHeight();
+        return new Vector2(h, h);
     }
 
     public static void Dot(Vector4 color, float radius = 4)

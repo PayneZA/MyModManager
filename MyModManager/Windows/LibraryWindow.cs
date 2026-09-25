@@ -571,6 +571,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
 
     private void DrawRows()
     {
+        using var rowSpacing = ImRaii.PushStyle(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, Theme.Scaled(2)));
         var rowHeight = ImGui.GetFrameHeightWithSpacing();
         if (rows.Count == 0)
         {
@@ -652,14 +653,15 @@ public sealed partial class LibraryWindow : Window, IDisposable
         var start = ImGui.GetCursorScreenPos();
         var width = ImGui.GetContentRegionAvail().X;
         var isSelected = selected.Contains(mod.Id);
+        var rowHovered = ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(start, start + new Vector2(width, h));
         var dl = ImGui.GetWindowDrawList();
         if (isSelected)
             dl.AddRectFilled(start, start + new Vector2(width, h), Theme.U32(Theme.Selected), Theme.Scaled(4));
         DrawRatingBar(start, mod.Rating);
 
         ImGui.SetCursorScreenPos(start + new Vector2(Theme.Scaled(10), 0));
-        DrawOnToggle(mod);
-        ImGui.SameLine();
+        DrawOnToggle(mod, h);
+        ImGui.SetCursorScreenPos(new Vector2(ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X, start.Y));
 
         var isAnimation = type.Style == ModTypeStyle.Animation && mod.IsAnimation;
         var playWidth = isAnimation ? Theme.IconButtonSize(FontAwesomeIcon.Play).X + ImGui.GetStyle().ItemSpacing.X : 0;
@@ -713,19 +715,24 @@ public sealed partial class LibraryWindow : Window, IDisposable
             ImGui.SameLine();
             using (ImRaii.Disabled(missing || !plugin.Penumbra.Available || plugin.Player.IsBusy))
             {
-                if (Theme.IconButton(FontAwesomeIcon.Play, "play", $"Turn on and play {Theme.CommandLabel(mod, true)}"))
+                if (Theme.IconButton(FontAwesomeIcon.Play, "play", $"Turn on and play {Theme.CommandLabel(mod, true)}", subtle: !rowHovered && !isSelected))
                     plugin.Player.Play(mod);
             }
         }
     }
 
-    private void DrawOnToggle(ManagedMod mod)
+    /// <summary>A checkbox a little smaller than the row, centred in it, so rows read as text first.</summary>
+    private void DrawOnToggle(ManagedMod mod, float rowHeight)
     {
         var missing = plugin.Entries.IsMissing(mod);
         var isOn = plugin.Entries.IsOn(mod) ?? false;
         var checkColor = mod.IsTemp ? Theme.Unsorted : Theme.On;
+        var padding = ImGui.GetStyle().FramePadding;
+        var shrink = Theme.Scaled(3);
+        ImGui.SetCursorScreenPos(ImGui.GetCursorScreenPos() + new Vector2(0, shrink));
+        using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(padding.X, Math.Max(0, padding.Y - shrink))))
         using (ImRaii.Disabled(missing || !plugin.Penumbra.Available))
-        using (ImRaii.PushColor(ImGuiCol.CheckMark, checkColor))
+        using (ImRaii.PushColor(ImGuiCol.CheckMark, checkColor).Push(ImGuiCol.FrameBg, Theme.FrameHover))
         {
             if (ImGui.Checkbox("###on", ref isOn))
                 plugin.Entries.Apply(plugin.Entries.ResolveShortcutGroup(mod), isOn);
