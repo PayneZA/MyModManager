@@ -481,6 +481,26 @@ public sealed class PenumbraService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Reads any mod's settings in the active collection (not only managed ones). Null when the
+    /// mod has no settings there or Penumbra is unavailable. One IPC call; don't use per frame.
+    /// </summary>
+    public ModState? ReadSettings(string modDirectory)
+    {
+        if (!Available || CollectionId == Guid.Empty)
+            return null;
+        try
+        {
+            var (ec, settings) = getCurrentModSettings.Invoke(CollectionId, modDirectory, string.Empty, false);
+            return ec == PenumbraApiEc.Success && settings is { } s ? new ModState(s.Item1, s.Item2, s.Item3) : null;
+        }
+        catch (Exception ex)
+        {
+            Svc.Log.Error(ex, $"Failed to read settings for {modDirectory}.");
+            return null;
+        }
+    }
+
     /// <summary>Names of the items one mod changes, e.g. "Emote: Sit on Ground".</summary>
     public IReadOnlyCollection<string> GetChangedItemNames(string modDirectory)
     {

@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using MyModManager.Helpers;
@@ -15,9 +16,10 @@ using Penumbra.Api.Enums;
 namespace MyModManager.Windows;
 
 /// <summary>
-/// Adds Penumbra mods to the Library. Reads each mod's files to find which emotes and poses it
-/// replaces, proposes one entry per animation (or per option for packs), and applies shared
-/// settings. Also used to point an existing entry at a different mod or option.
+/// Adds Penumbra mods to the Library. Laid out like Penumbra's own mod panel: the mod itself
+/// first (just on/off, or once per animation it plays), then its option groups with the real
+/// option names. Animations and poses are read from the mod's files.
+/// Also used to point an existing entry at a different mod or option.
 /// </summary>
 public sealed class AddWindow : Window, IDisposable
 {
@@ -26,21 +28,24 @@ public sealed class AddWindow : Window, IDisposable
     private sealed class Candidate
     {
         public bool Include;
-        public string Name = string.Empty;
+        public bool WholeMod;
+        public bool Plain;                  // "just the mod", no emote
+        public string Label = string.Empty; // what it is, in Penumbra's words
+        public string Name = string.Empty;  // editable entry name
         public string Group = string.Empty;
         public string Option = string.Empty;
         public GroupType Type = GroupType.Single;
         public string Command = string.Empty;
         public int? Pose;
-        public string Found = string.Empty;
+        public DetectionSource? Source;
         public bool InLibrary;
-        public bool WholeMod;
+        public bool SelectedInPenumbra;
     }
 
-    private static readonly string[] OffOptionNames = ["none", "off", "disabled", "disable", "vanilla", "default", "nothing", "original"];
-    private static readonly Regex Brackets = new(@"\[[^\]]*\]", RegexOptions.Compiled);
-    private static readonly Regex TrailingParens = new(@"\s*\([^)]*\)\s*$", RegexOptions.Compiled);
+    private static readonly string[] OffOptionNames = ["none", "off", "disabled", "disable", "vanilla", "nothing", "original"];
+    private static readonly Regex TagBrackets = new(@"\s*\[[^\]]*\]", RegexOptions.Compiled);
     private static readonly Regex LeadingNumber = new(@"^\s*\d{2,4}\s+", RegexOptions.Compiled);
+    private static readonly Regex RoleParens = new(@"\s*\([^)]*[A-Za-z]+\s?-\s?[A-Za-z]+[^)]*\)", RegexOptions.Compiled);
 
     private readonly Plugin plugin;
     private readonly StatusLine status = new();
@@ -51,19 +56,18 @@ public sealed class AddWindow : Window, IDisposable
     private string? selectedDir;
     private ManagedMod? rebindTarget;
 
-    // Mod list cache
     private List<KeyValuePair<string, string>> modRows = new();
     private string listKey = string.Empty;
 
-    // Selected mod
     private string? loadedDir;
     private Task<ModFiles?>? filesTask;
     private List<Candidate> candidates = new();
     private bool candidatesBuilt;
     private bool isPack;
+    private bool modOnInPenumbra;
     private string optionFilter = string.Empty;
+    private Candidate? editingCommand;
 
-    // Settings for new entries
     private string typeId = string.Empty;
     private int ratingChoice = 2; // 0 SFW, 1 NSFW, 2 sort later
     private string category = string.Empty;
@@ -75,7 +79,6 @@ public sealed class AddWindow : Window, IDisposable
     private string newCategory = string.Empty;
     private string newPosition = string.Empty;
 
-    // "New animations" view
     private Dictionary<string, List<EmoteInfo>>? unlisted;
 
     private Configuration Config => plugin.Configuration;
@@ -84,9 +87,9 @@ public sealed class AddWindow : Window, IDisposable
         : base("Add from Penumbra###MyModManager.Add", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.plugin = plugin;
-        Size = new Vector2(1000, 640);
+        Size = new Vector2(1100, 680);
         SizeCondition = ImGuiCond.FirstUseEver;
-        SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(760, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
+        SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(820, 460), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
     }
 
     public void Dispose() { }
@@ -107,7 +110,7 @@ public sealed class AddWindow : Window, IDisposable
         rebindTarget = mod;
         view = View.Browse;
         search = string.Empty;
-        Select(mod.ModName);
+        Select(mod.ModName, force: true);
         IsOpen = true;
     }
 
@@ -123,13 +126,14 @@ public sealed class AddWindow : Window, IDisposable
 
         if (rebindTarget != null)
         {
-            ImGui.TextColored(Theme.Unsorted, $"Choose the mod or option for “{rebindTarget.DisplayName}”, then press Use on a row.");
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Unsorted, $"Choosing what “{rebindTarget.DisplayName}” turns on: pick a mod, then press Use on a row.");
             ImGui.SameLine();
-            if (ImGui.SmallButton("Cancel"))
+            if (ImGui.Button("Cancel"))
                 rebindTarget = null;
         }
 
-        var leftWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.36f, Theme.Scaled(300), Theme.Scaled(420));
+        var leftWidth = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.32f, Theme.Scaled(280), Theme.Scaled(400));
         using (var left = ImRaii.Child("###addLeft", new Vector2(leftWidth, 0), true))
         {
             if (left)
@@ -167,16 +171,15 @@ public sealed class AddWindow : Window, IDisposable
         }
         Theme.Hint(viewIndex == 1 ? "Mods that replace emotes and aren't in your library yet." : "Every mod installed in Penumbra.");
 
+        ImGui.SameLine();
         if (view == View.Browse)
         {
-            ImGui.SameLine();
             Theme.RightAlign(Theme.ButtonWidth("Hide added"));
             if (Theme.Chip("Hide added", hideAdded))
                 hideAdded = !hideAdded;
         }
         else
         {
-            ImGui.SameLine();
             Theme.RightAlign(Theme.ButtonWidth("Rescan"));
             if (ImGui.Button("Rescan"))
                 ScanUnlisted();
@@ -212,14 +215,14 @@ public sealed class AddWindow : Window, IDisposable
                 if (ImGui.Selectable("###mod", selectedDir == dir, ImGuiSelectableFlags.None, new Vector2(width, h)))
                     Select(dir);
                 if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(dir == name ? name : $"{name}\nFolder: {dir}");
+                    ImGui.SetTooltip(name);
 
                 var dl = ImGui.GetWindowDrawList();
                 var textY = start.Y + (h - ImGui.GetTextLineHeight()) / 2;
                 var right = start.X + width - Theme.Scaled(6);
                 if (managed.TryGetValue(dir, out var count))
                 {
-                    var label = count == 1 ? "in library" : $"{count} in library";
+                    var label = count == 1 ? "added" : $"{count} added";
                     var w = ImGui.CalcTextSize(label).X;
                     dl.AddText(new Vector2(right - w, textY), Theme.U32(Theme.Gold), label);
                     right -= w + Theme.Scaled(8);
@@ -252,21 +255,22 @@ public sealed class AddWindow : Window, IDisposable
         modRows = mods.OrderBy(m => m.Value, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private void Select(string dir)
+    private void Select(string dir, bool force = false)
     {
         selectedDir = dir;
-        if (loadedDir == dir)
+        if (loadedDir == dir && !force)
             return;
 
         loadedDir = dir;
         candidatesBuilt = false;
         candidates = new List<Candidate>();
         optionFilter = string.Empty;
+        editingCommand = null;
         var modFolder = plugin.Penumbra.GetModFolder(dir);
         filesTask = modFolder == null ? Task.FromResult<ModFiles?>(null) : Task.Run(() => ModFileReader.Read(modFolder));
     }
 
-    // ------------------------------------------------------------------ overview (nothing selected)
+    // ------------------------------------------------------------------ overview
 
     private void DrawOverview()
     {
@@ -274,9 +278,9 @@ public sealed class AddWindow : Window, IDisposable
         {
             ImGui.TextUnformatted("Pick a mod on the left.");
             ImGui.Spacing();
-            ImGui.TextDisabled("My Mod Manager reads the mod's files to see which emotes and poses it replaces,");
-            ImGui.TextDisabled("then suggests one entry for each. A mod tagged [Gsit1_2] becomes two entries, pose 1 and 2.");
-            ImGui.TextDisabled("Packs with many options become one entry per option you tick.");
+            ImGui.TextDisabled("You'll see it the way Penumbra shows it: the mod itself, then its options.");
+            ImGui.TextDisabled("Tick what you want in your library. Animations and poses are read from the mod's files,");
+            ImGui.TextDisabled("so a [Gsit1_2] mod shows as Sit on Ground pose 1 and pose 2.");
             return;
         }
 
@@ -287,14 +291,13 @@ public sealed class AddWindow : Window, IDisposable
         ImGui.Spacing();
         if (single.Count > 0)
         {
-            ImGui.TextDisabled($"{single.Count} of them replace a single emote, so they can be added in one go.");
-            ImGui.TextDisabled("They go into Unsorted, ready to rate.");
+            ImGui.TextDisabled($"{single.Count} of them replace a single emote, so they can be added in one go, ready to sort.");
             ImGui.Spacing();
             if (Theme.PrimaryButton($"Add {single.Count} as unsorted"))
                 AddAllSingleEmote(single);
         }
         ImGui.Spacing();
-        ImGui.TextDisabled("Mods that touch several emotes or poses: open them to choose what to add.");
+        ImGui.TextDisabled("Mods that play several emotes or poses: open them to choose.");
     }
 
     private void ScanUnlisted()
@@ -340,14 +343,13 @@ public sealed class AddWindow : Window, IDisposable
                 created.Add(new ManagedMod
                 {
                     ModName = dir,
-                    DisplayName = poses.Count > 1 ? $"{CleanName(name)} · pose {pose}" : CleanName(name),
+                    DisplayName = poses.Count > 1 ? $"{name} · pose {pose}" : name,
                     AnimationCommand = emote.Command,
                     PoseNumber = pose,
                     IsAnimation = true,
                     ModTypeId = animationType.Id,
                     Rating = ContentRating.Unrated,
                     IsTemp = true,
-                    IsFavorite = false,
                 });
             }
         }
@@ -364,10 +366,8 @@ public sealed class AddWindow : Window, IDisposable
     private void DrawModDetail(string dir)
     {
         var name = plugin.Penumbra.ModList.GetValueOrDefault(dir, dir);
-        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Text))
-            ImGui.TextUnformatted(name);
-        var selector = plugin.Penumbra.GetSelectorPath(dir);
-        ImGui.TextDisabled($"Penumbra: {selector ?? dir}");
+        ImGui.TextUnformatted(name);
+        ImGui.TextDisabled($"Penumbra: {plugin.Penumbra.GetSelectorPath(dir) ?? dir}");
 
         if (filesTask is not { IsCompleted: true })
         {
@@ -379,142 +379,216 @@ public sealed class AddWindow : Window, IDisposable
         if (!candidatesBuilt)
             BuildCandidates(dir, name, filesTask.Result);
 
-        var existing = Config.ManagedMods.Where(m => m.ModName.Equals(dir, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (existing.Count > 0)
-            ImGui.TextColored(Theme.Gold, $"Already in your library: {string.Join(", ", existing.Select(m => m.DisplayName).Take(4))}{(existing.Count > 4 ? $" and {existing.Count - 4} more" : string.Empty)}");
+        ImGui.SameLine();
+        var stateText = modOnInPenumbra ? "On in your collection" : "Off in your collection";
+        Theme.RightAlign(ImGui.CalcTextSize(stateText).X + Theme.Scaled(14));
+        Theme.Dot(modOnInPenumbra ? Theme.On : Theme.Faint);
+        ImGui.SameLine();
+        if (modOnInPenumbra)
+            ImGui.TextColored(Theme.On, stateText);
+        else
+            ImGui.TextDisabled(stateText);
 
         ImGui.Spacing();
         DrawSummary();
-        ImGui.Separator();
 
-        var settingsHeight = rebindTarget == null ? ImGui.GetFrameHeightWithSpacing() * 7.6f : ImGui.GetFrameHeightWithSpacing();
+        var settingsHeight = rebindTarget == null ? ImGui.GetFrameHeightWithSpacing() * 5 + Theme.Scaled(16) : 0;
         using (var table = ImRaii.Child("###candidates", new Vector2(0, -settingsHeight), false))
         {
             if (table)
                 DrawCandidates();
         }
 
-        ImGui.Separator();
         if (rebindTarget == null)
             DrawNewEntrySettings(dir);
-        status.Draw();
     }
 
     private void DrawSummary()
     {
-        var detected = candidates.Where(c => c.Command.Length > 0).ToList();
-        if (detected.Count == 0)
-            ImGui.TextDisabled("No animations found. You can still add the mod or its options, e.g. as a toggle or a switch.");
-        else if (isPack)
-            ImGui.TextDisabled($"A pack: {detected.Count(c => !c.WholeMod)} options with animations. Tick the ones you want; each becomes its own entry.");
+        var animated = candidates.Where(c => c.Command.Length > 0 && !c.WholeMod).ToList();
+        if (isPack)
+            ImGui.TextDisabled($"A pack with {animated.Count} animations in its options. Tick the ones you want; each becomes its own entry.");
+        else if (candidates.Any(c => c.WholeMod && !c.Plain))
+            ImGui.TextDisabled("Tick what to add. Adding the mod turns it on with the options you've set in Penumbra.");
         else
-            ImGui.TextDisabled($"Found {string.Join(", ", detected.Where(c => c.WholeMod).Select(c => c.Found).Distinct())}. Options are listed below if you want a specific variant instead.");
+            ImGui.TextDisabled("No animations found in this mod. Add it as an on/off entry, or pick options to switch between.");
 
-        if (candidates.Count > 12)
+        if (candidates.Count(c => !c.WholeMod) > 10)
         {
-            ImGui.SetNextItemWidth(Theme.Scaled(220));
+            ImGui.SetNextItemWidth(Theme.Scaled(240));
             ImGui.InputTextWithHint("###optionFilter", "Filter options…", ref optionFilter, 64);
             ImGui.SameLine();
-            if (ImGui.Button("Tick detected"))
-                foreach (var c in VisibleCandidates().Where(c => c.Command.Length > 0 && !c.InLibrary && !c.WholeMod)) c.Include = true;
+            if (ImGui.Button("Tick all shown"))
+                foreach (var c in VisibleCandidates().Where(c => !c.WholeMod && !c.InLibrary)) c.Include = true;
             ImGui.SameLine();
             if (ImGui.Button("Untick all"))
                 foreach (var c in candidates) c.Include = false;
         }
+        status.Draw();
     }
 
     private IEnumerable<Candidate> VisibleCandidates()
     {
         var words = optionFilter.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return candidates.Where(c => words.All(w => $"{c.Name} {c.Option} {c.Group} {c.Command}".Contains(w, StringComparison.OrdinalIgnoreCase)));
+        return candidates.Where(c => c.WholeMod || words.All(w => $"{c.Label} {c.Group} {c.Command}".Contains(w, StringComparison.OrdinalIgnoreCase)));
     }
 
     private void DrawCandidates()
     {
-        var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.PadOuterX;
-        using var table = ImRaii.Table("###cand", rebindTarget == null ? 4 : 5, flags);
+        using var table = ImRaii.Table("###cand", 4, ImGuiTableFlags.RowBg | ImGuiTableFlags.PadOuterX | ImGuiTableFlags.BordersInnerH);
         if (!table)
             return;
 
-        ImGui.TableSetupColumn("###inc", ImGuiTableColumnFlags.WidthFixed, ImGui.GetFrameHeight());
-        ImGui.TableSetupColumn("Entry name", ImGuiTableColumnFlags.WidthStretch, 3f);
-        ImGui.TableSetupColumn("Use", ImGuiTableColumnFlags.WidthStretch, 2f);
-        ImGui.TableSetupColumn("Found in", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(70));
-        if (rebindTarget != null)
-            ImGui.TableSetupColumn("###use", ImGuiTableColumnFlags.WidthFixed, Theme.ButtonWidth("Use"));
-        ImGui.TableHeadersRow();
+        var w = ImGui.GetContentRegionAvail().X;
+        ImGui.TableSetupColumn("###inc", ImGuiTableColumnFlags.WidthFixed, rebindTarget != null ? Theme.ButtonWidth("Use") : ImGui.GetFrameHeight());
+        ImGui.TableSetupColumn("In Penumbra", ImGuiTableColumnFlags.WidthStretch, 0.45f);
+        ImGui.TableSetupColumn("Plays", ImGuiTableColumnFlags.WidthFixed, Math.Max(Theme.Scaled(170), w * 0.2f));
+        ImGui.TableSetupColumn("Name in your library", ImGuiTableColumnFlags.WidthStretch, 0.35f);
 
-        string? lastGroup = null;
+        string? lastSection = null;
         var index = 0;
         foreach (var c in VisibleCandidates())
         {
             using var id = ImRaii.PushId(index++);
-            var group = c.WholeMod ? "Whole mod" : $"{c.Group} · {(c.Type == GroupType.Multi ? "multi choice" : "single choice")}";
-            if (group != lastGroup)
+            var section = c.WholeMod ? "THE MOD" : c.Group;
+            if (section != lastSection)
             {
-                lastGroup = group;
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TableNextColumn();
-                ImGui.TextColored(Theme.Dim, group);
+                lastSection = section;
+                SectionRow(c);
             }
 
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            using (ImRaii.Disabled(c.InLibrary))
-                ImGui.Checkbox("###include", ref c.Include);
-            if (c.InLibrary)
-                Theme.Hint("Already in your library.");
-
-            ImGui.TableNextColumn();
-            ImGui.SetNextItemWidth(-1);
-            ImGui.InputText("###name", ref c.Name, 96);
-            if (!c.WholeMod && ImGui.IsItemHovered())
-                ImGui.SetTooltip($"Penumbra option: {c.Option}");
-
-            ImGui.TableNextColumn();
-            DrawCommandCell(c);
-
-            ImGui.TableNextColumn();
-            ImGui.AlignTextToFramePadding();
-            if (c.InLibrary)
-                ImGui.TextColored(Theme.Gold, "in library");
-            else
-                ImGui.TextDisabled(c.Command.Length == 0 ? "—" : c.Found.StartsWith("name") ? "name" : "files");
-
             if (rebindTarget != null)
             {
-                ImGui.TableNextColumn();
                 if (Theme.PrimaryButton("Use"))
                     Rebind(c);
             }
+            else if (c.InLibrary)
+            {
+                ImGui.AlignTextToFramePadding();
+                using (ImRaii.PushFont(UiBuilder.IconFont))
+                    ImGui.TextColored(Theme.Gold, FontAwesomeIcon.Check.ToIconString());
+                Theme.Hint("Already in your library.");
+            }
+            else
+            {
+                ImGui.Checkbox("###include", ref c.Include);
+            }
+
+            ImGui.TableNextColumn();
+            ImGui.AlignTextToFramePadding();
+            if (c.SelectedInPenumbra)
+            {
+                Theme.Dot(Theme.On);
+                Theme.Hint("Currently selected in Penumbra.");
+                ImGui.SameLine();
+            }
+            ImGui.TextWrapped(c.Label);
+            if (c.InLibrary)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(Theme.Gold, "added");
+            }
+
+            ImGui.TableNextColumn();
+            DrawPlaysButton(c);
+
+            ImGui.TableNextColumn();
+            ImGui.SetNextItemWidth(-1);
+            using (ImRaii.Disabled(c.InLibrary || rebindTarget != null))
+                ImGui.InputText("###name", ref c.Name, 120);
         }
+
+        DrawCommandPopup();
     }
 
-    private void DrawCommandCell(Candidate c)
+    private void SectionRow(Candidate first)
     {
-        var emote = plugin.Emotes.FromCommand(c.Command);
-        var hasPoses = emote is { PoseCount: > 1 };
-        var commandWidth = hasPoses ? ImGui.GetContentRegionAvail().X * 0.55f : ImGui.GetContentRegionAvail().X;
-        ImGui.SetNextItemWidth(commandWidth);
-        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Gold, c.Command.Length > 0))
-            ImGui.InputTextWithHint("###cmd", "no command", ref c.Command, 48);
-        if (!hasPoses)
-            return;
-
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(-1);
-        using var combo = ImRaii.Combo("###pose", ManagedModListUi.PoseLabel(c.Pose));
-        if (!combo)
-            return;
-        if (ImGui.Selectable(ManagedModListUi.PoseLabel(null), c.Pose == null))
-            c.Pose = null;
-        for (var pose = 0; pose < emote!.PoseCount; pose++)
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TableNextColumn();
+        if (first.WholeMod)
         {
-            if (ImGui.Selectable(ManagedModListUi.PoseLabel(pose), c.Pose == pose))
-                c.Pose = pose;
+            Theme.Label("The mod itself");
+            ImGui.TextDisabled("Turns the whole mod on or off, with the options you've set in Penumbra.");
+        }
+        else
+        {
+            Theme.Label($"Option group · {first.Group}");
+            ImGui.TextDisabled(first.Type == GroupType.Multi
+                ? "Any number can be on. Adding an option turns just that option on."
+                : "Pick one. Adding an option switches the group to it.");
         }
     }
+
+    /// <summary>The command a row plays, as a gold button; clicking it edits command and pose.</summary>
+    private void DrawPlaysButton(Candidate c)
+    {
+        var label = c.Command.Length == 0 ? (c.Plain ? "just on / off" : "no emote") : CommandText(c.Command, c.Pose);
+        using (ImRaii.PushColor(ImGuiCol.Text, c.Command.Length == 0 ? Theme.Dim : Theme.Gold))
+        using (ImRaii.PushColor(ImGuiCol.Button, Theme.Frame))
+        {
+            if (ImGui.Button($"{label}###plays", new Vector2(-1, 0)) && rebindTarget == null && !c.InLibrary)
+            {
+                editingCommand = c;
+                ImGui.OpenPopup("###commandPopup");
+            }
+        }
+        if (c.Source == DetectionSource.Name)
+            Theme.Hint("Guessed from the name, not the files. Click to change.");
+        else if (c.Command.Length > 0)
+            Theme.Hint("Found in the mod's files. Click to change.");
+        else
+            Theme.Hint("Click to set an emote command, e.g. /groundsit.");
+    }
+
+    private void DrawCommandPopup()
+    {
+        using var popup = ImRaii.Popup("###commandPopup");
+        if (!popup || editingCommand == null)
+            return;
+
+        var c = editingCommand;
+        Theme.Label("Emote command");
+        ImGui.SetNextItemWidth(Theme.Scaled(200));
+        if (ImGui.IsWindowAppearing())
+            ImGui.SetKeyboardFocusHere();
+        ImGui.InputTextWithHint("###cmd", "/groundsit", ref c.Command, 48);
+        var emote = plugin.Emotes.FromCommand(c.Command);
+        if (c.Command.Length > 0)
+        {
+            if (emote != null)
+                ImGui.TextColored(Theme.On, emote.Name);
+            else
+                ImGui.TextColored(Theme.Warning, "Not an emote the game knows.");
+        }
+
+        if (emote is { PoseCount: > 1 })
+        {
+            Theme.Label("Pose");
+            var options = new List<string> { "Any" };
+            options.AddRange(Enumerable.Range(0, emote.PoseCount).Select(p => p == 0 ? "Default" : p.ToString()));
+            var index = c.Pose is { } p ? p + 1 : 0;
+            if (Theme.Segmented("pose", options, ref index))
+                c.Pose = index == 0 ? null : index - 1;
+            ImGui.TextDisabled("Numbered like mod names: [Gsit1] is pose 1.");
+        }
+        else
+        {
+            c.Pose = null;
+        }
+
+        if (ImGui.Button("Done"))
+            ImGui.CloseCurrentPopup();
+    }
+
+    private static string CommandText(string command, int? pose) => pose switch
+    {
+        null => command,
+        0 => $"{command} · default",
+        var p => $"{command} · pose {p}",
+    };
 
     // ------------------------------------------------------------------ candidates
 
@@ -523,23 +597,34 @@ public sealed class AddWindow : Window, IDisposable
         candidatesBuilt = true;
         candidates = new List<Candidate>();
         var emotes = plugin.Emotes;
+        var settings = plugin.Penumbra.ReadSettings(dir);
+        modOnInPenumbra = settings?.Enabled == true;
 
+        // The mod itself: once as plain on/off, then once per animation it plays.
         var whole = AnimationDetector.Detect(emotes, modName, files?.AllPaths ?? Enumerable.Empty<string>());
         if (whole.Count == 0 && files == null)
         {
-            // No readable files: fall back to Penumbra's changed items.
-            var changed = plugin.Penumbra.GetChangedItemNames(dir)
+            whole = plugin.Penumbra.GetChangedItemNames(dir)
                 .Select(emotes.FromName).OfType<EmoteInfo>().DistinctBy(e => e.Id)
-                .Select(e => new Detection(e, null, string.Empty, DetectionSource.Name));
-            whole = changed.ToList();
+                .Select(e => new Detection(e, null, string.Empty, DetectionSource.Name)).ToList();
         }
 
-        var cleanMod = CleanName(modName);
-        if (whole.Count == 0)
-            candidates.Add(new Candidate { Name = cleanMod, WholeMod = true });
+        candidates.Add(new Candidate { WholeMod = true, Plain = true, Label = "Just the mod (on / off)", Name = modName });
+        var manyEmotes = whole.Select(d => d.Emote.Id).Distinct().Count() > 1;
         foreach (var d in whole)
-            candidates.Add(FromDetection(d, whole.Count == 1 ? cleanMod : $"{cleanMod} · {Label(d)}", string.Empty, string.Empty, GroupType.Single, wholeMod: true));
+        {
+            candidates.Add(new Candidate
+            {
+                WholeMod = true,
+                Label = $"As {Describe(d)}",
+                Name = $"{modName} · {ShortSuffix(d, manyEmotes)}",
+                Command = d.Emote.Command,
+                Pose = d.Pose,
+                Source = d.Source,
+            });
+        }
 
+        // Options, grouped as in Penumbra, with their real names.
         IEnumerable<(string Group, GroupType Type, string Option, IReadOnlyList<string> Paths)> options = files != null
             ? files.Groups.SelectMany(g => g.Options.Select(o => (g.Name, g.Type, o.Name, o.GamePaths)))
             : (plugin.Penumbra.GetOptionGroups(dir) ?? new List<OptionGroup>())
@@ -547,94 +632,132 @@ public sealed class AddWindow : Window, IDisposable
 
         foreach (var (group, type, option, paths) in options)
         {
+            var selected = settings?.Settings.TryGetValue(group, out var list) == true && list.Contains(option);
             if (OffOptionNames.Contains(option.Trim(), StringComparer.OrdinalIgnoreCase))
                 continue;
+
             var detected = AnimationDetector.Detect(emotes, option, paths);
-            var clean = CleanName(option);
+            var baseName = EntryNameFromOption(option, detected.Any(d => d.Role.Length > 0));
+            var optionManyEmotes = detected.Select(d => d.Emote.Id).Distinct().Count() > 1;
             if (detected.Count == 0)
-                candidates.Add(new Candidate { Name = clean, Group = group, Option = option, Type = type });
+            {
+                candidates.Add(new Candidate { Label = option, Name = baseName, Group = group, Option = option, Type = type, SelectedInPenumbra = selected });
+                continue;
+            }
+
             foreach (var d in detected)
-                candidates.Add(FromDetection(d, detected.Count == 1 ? clean : $"{clean} · {Label(d)}", group, option, type, wholeMod: false));
+            {
+                candidates.Add(new Candidate
+                {
+                    Label = detected.Count == 1 ? option : $"{option}  ·  {Describe(d)}",
+                    Name = detected.Count == 1 ? baseName : $"{baseName} · {ShortSuffix(d, optionManyEmotes)}",
+                    Group = group,
+                    Option = option,
+                    Type = type,
+                    Command = d.Emote.Command,
+                    Pose = d.Pose,
+                    Source = d.Source,
+                    SelectedInPenumbra = selected,
+                });
+            }
         }
 
         foreach (var c in candidates)
             c.InLibrary = IsInLibrary(dir, c);
 
-        isPack = candidates.Count(c => !c.WholeMod && c.Command.Length > 0) > 6;
-        var anyAnimation = candidates.Any(c => c.Command.Length > 0);
-        var hasOptions = candidates.Any(c => !c.WholeMod);
+        var optionRows = candidates.Where(c => !c.WholeMod).ToList();
+        var animatedOptions = optionRows.Count(c => c.Command.Length > 0);
+        var multiAnimated = optionRows.Where(c => c.Type == GroupType.Multi && c.Command.Length > 0).GroupBy(c => c.Group).Any(g => g.Count() >= 5);
+        isPack = animatedOptions > 12 || multiAnimated;
+
+        // Pre-tick only the obvious: a couple mod's one or two poses, or a mod with no animations.
+        var wholeAnimated = candidates.Where(c => c.WholeMod && !c.Plain).ToList();
         foreach (var c in candidates)
+            c.Include = false;
+        if (!isPack)
         {
-            c.Include = !c.InLibrary && c.WholeMod && !isPack && (anyAnimation ? c.Command.Length > 0 : !hasOptions);
+            if (wholeAnimated.Count is > 0 and <= 2)
+                wholeAnimated.ForEach(c => c.Include = !c.InLibrary);
+            else if (wholeAnimated.Count == 0 && optionRows.Count == 0)
+                candidates[0].Include = !candidates[0].InLibrary;
         }
 
-        // Sensible defaults for the new entries.
+        var anyAnimation = candidates.Any(c => c.Command.Length > 0);
         var animationType = Config.ModTypes.FirstOrDefault(t => t.Style == ModTypeStyle.Animation);
         typeId = rebindTarget?.ModTypeId ?? (anyAnimation ? animationType?.Id : Config.ModTypes.FirstOrDefault(t => t.Style != ModTypeStyle.Animation)?.Id) ?? Config.ModTypes[0].Id;
         temporary = anyAnimation;
-        autoSync = candidates.Any(c => c.Found.Contains('(') && !c.Found.StartsWith("name")) || modName.Contains("Dom&Sub", StringComparison.OrdinalIgnoreCase)
-                   || whole.Count(d => d.Pose != null) > 1;
+        autoSync = whole.Count(d => d.Pose != null) > 1 || whole.Any(d => d.Role.Length > 0)
+                   || modName.Contains("Dom&Sub", StringComparison.OrdinalIgnoreCase);
         var path = plugin.Penumbra.GetSelectorPath(dir) ?? string.Empty;
         ratingChoice = path.Contains("nsfw", StringComparison.OrdinalIgnoreCase) || modName.Contains("nsfw", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
     }
 
-    private static string Label(Detection d) =>
-        d.Role.Length > 0 ? d.Role : d.Pose switch
-        {
-            null => d.Emote.Command,
-            0 => "default pose",
-            var p => $"pose {p}",
-        };
-
-    private static Candidate FromDetection(Detection d, string name, string group, string option, GroupType type, bool wholeMod) => new()
+    /// <summary>"Dom · Sit on Ground, pose 2" or "Doze, pose 1" or "Gold Dance".</summary>
+    private static string Describe(Detection d)
     {
-        Name = name,
-        Group = group,
-        Option = option,
-        Type = type,
-        Command = d.Emote.Command,
-        Pose = d.Pose,
-        Found = $"{(d.Source == DetectionSource.Name ? "name" : "files")} {AnimationDetector.Describe(d)}",
-        WholeMod = wholeMod,
-    };
+        var what = d.Pose switch
+        {
+            null => d.Emote.Name,
+            0 => $"{d.Emote.Name}, default pose",
+            var p => $"{d.Emote.Name}, pose {p}",
+        };
+        return d.Role.Length > 0 ? $"{d.Role} · {what}" : what;
+    }
+
+    /// <summary>Name suffix: the role if known, else the pose (with the emote when a mod plays several).</summary>
+    private static string ShortSuffix(Detection d, bool includeEmote)
+    {
+        if (d.Role.Length > 0)
+            return d.Role;
+        var pose = d.Pose switch { null => string.Empty, 0 => "default pose", var p => $"pose {p}" };
+        if (!includeEmote)
+            return pose.Length > 0 ? pose : d.Emote.Name;
+        return pose.Length > 0 ? $"{d.Emote.Name} {pose}" : d.Emote.Name;
+    }
+
+    /// <summary>
+    /// Keeps the Penumbra option name recognisable: drops a leading "057 " index and a trailing
+    /// "-- author note", and the "(Dom-X/Sub-Y)" part when roles become the suffix.
+    /// </summary>
+    private static string EntryNameFromOption(string option, bool hasRoles)
+    {
+        var name = option;
+        var note = name.IndexOf(" -- ", StringComparison.Ordinal);
+        if (note > 0)
+            name = name[..note];
+        name = LeadingNumber.Replace(name, string.Empty);
+        if (hasRoles)
+            name = RoleParens.Replace(name, string.Empty);
+        name = Regex.Replace(name, @"\s{2,}", " ").Trim(' ', '$', '-');
+        return name.Length > 0 ? name : option.Trim();
+    }
 
     private bool IsInLibrary(string dir, Candidate c) =>
         Config.ManagedMods.Any(m =>
             m.ModName.Equals(dir, StringComparison.OrdinalIgnoreCase)
             && m.GroupName == c.Group && m.OptionName == c.Option
-            && (c.Command.Length == 0 || plugin.Emotes.FromCommand(m.AnimationCommand)?.Id == plugin.Emotes.FromCommand(c.Command)?.Id)
+            && (c.Plain ? m.AnimationCommand.Length == 0 || !c.WholeMod
+                : c.Command.Length == 0 || plugin.Emotes.FromCommand(m.AnimationCommand)?.Id == plugin.Emotes.FromCommand(c.Command)?.Id)
             && (m.PoseNumber == null || c.Pose == null || m.PoseNumber == c.Pose));
-
-    /// <summary>"154 [Dom&Sub] [Noff] Standing Doggy (Dom-Gsit2/Sub-Gsit3) -- note" becomes "Standing Doggy".</summary>
-    private static string CleanName(string raw)
-    {
-        var name = raw;
-        var dashes = name.IndexOf(" -- ", StringComparison.Ordinal);
-        if (dashes > 0)
-            name = name[..dashes];
-        name = Brackets.Replace(name, " ");
-        name = TrailingParens.Replace(name, string.Empty);
-        name = LeadingNumber.Replace(name, string.Empty);
-        name = Regex.Replace(name, @"\s{2,}", " ").Trim(' ', '$', '-');
-        return name.Length > 0 ? name : raw.Trim();
-    }
 
     // ------------------------------------------------------------------ settings + add
 
     private void DrawNewEntrySettings(string dir)
     {
+        ImGui.Separator();
         var type = Config.ModTypes.FirstOrDefault(t => t.Id == typeId) ?? Config.ModTypes[0];
-        using (var table = ImRaii.Table("###newSettings", 4, ImGuiTableFlags.SizingStretchProp))
+        var labelWidth = Theme.Scaled(76);
+        using (var table = ImRaii.Table("###newSettings", 4, ImGuiTableFlags.None))
         {
             if (table)
             {
-                ImGui.TableSetupColumn("k1", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(70));
-                ImGui.TableSetupColumn("v1", ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("k2", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(70));
-                ImGui.TableSetupColumn("v2", ImGuiTableColumnFlags.WidthStretch);
+                ImGui.TableSetupColumn("k1", ImGuiTableColumnFlags.WidthFixed, labelWidth);
+                ImGui.TableSetupColumn("v1", ImGuiTableColumnFlags.WidthStretch, 1f);
+                ImGui.TableSetupColumn("k2", ImGuiTableColumnFlags.WidthFixed, labelWidth);
+                ImGui.TableSetupColumn("v2", ImGuiTableColumnFlags.WidthStretch, 1f);
 
                 ImGui.TableNextRow();
-                Cell("Tab", () =>
+                Cell("Add to", () =>
                 {
                     ImGui.SetNextItemWidth(-1);
                     using var combo = ImRaii.Combo("###type", type.Name);
@@ -674,10 +797,7 @@ public sealed class AddWindow : Window, IDisposable
                 });
 
                 ImGui.TableNextRow();
-                Cell(string.Empty, () =>
-                {
-                    ImGui.Checkbox("Favourite", ref favourite);
-                }, "favourite");
+                Cell(string.Empty, () => ImGui.Checkbox("Favourite", ref favourite), "favourite");
                 Cell(string.Empty, () =>
                 {
                     using (ImRaii.Disabled(!plugin.Player.EmoteSyncAvailable || type.Style != ModTypeStyle.Animation))
@@ -688,10 +808,11 @@ public sealed class AddWindow : Window, IDisposable
         }
 
         var count = candidates.Count(c => c.Include);
-        Theme.RightAlign(Theme.ButtonWidth($"Add {count} entries"));
+        var label = count == 1 ? "Add 1 entry" : $"Add {count} entries";
+        Theme.RightAlign(Theme.ButtonWidth(label));
         using (ImRaii.Disabled(count == 0))
         {
-            if (Theme.PrimaryButton(count == 1 ? "Add 1 entry" : $"Add {count} entries"))
+            if (Theme.PrimaryButton(label))
                 AddIncluded(dir, type);
         }
     }
@@ -737,13 +858,13 @@ public sealed class AddWindow : Window, IDisposable
         var created = candidates.Where(c => c.Include).Select(c => new ManagedMod
         {
             ModName = dir,
-            DisplayName = c.Name.Trim().Length > 0 ? c.Name.Trim() : dir,
+            DisplayName = c.Name.Trim().Length > 0 ? c.Name.Trim() : c.Label,
             GroupName = c.Group,
             OptionName = c.Option,
             GroupType = c.Type,
             AnimationCommand = c.Command.Trim(),
             PoseNumber = c.Pose,
-            IsAnimation = c.Command.Trim().Length > 0 || type.Style == ModTypeStyle.Animation,
+            IsAnimation = c.Command.Trim().Length > 0,
             ModTypeId = type.Id,
             Rating = ratingChoice switch { 0 => ContentRating.Sfw, 1 => ContentRating.Nsfw, _ => ContentRating.Unrated },
             Category = category,
