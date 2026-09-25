@@ -26,6 +26,7 @@ public sealed class Plugin : IDalamudPlugin
     public MainWindow MainWindow { get; }
     public ModManagerWindow ModManagerWindow { get; }
     public LibraryWindow LibraryWindow { get; }
+    public AddWindow AddWindow { get; }
 
     public Plugin(IDalamudPluginInterface pluginInterface)
     {
@@ -44,9 +45,11 @@ public sealed class Plugin : IDalamudPlugin
         MainWindow = new MainWindow(this);
         ModManagerWindow = new ModManagerWindow(this);
         LibraryWindow = new LibraryWindow(this);
+        AddWindow = new AddWindow(this);
         WindowSystem.AddWindow(MainWindow);
         WindowSystem.AddWindow(ModManagerWindow);
         WindowSystem.AddWindow(LibraryWindow);
+        WindowSystem.AddWindow(AddWindow);
 
         Svc.Commands.AddHandler(CommandName, new CommandInfo(OnCommand) { HelpMessage = Usage });
 
@@ -68,6 +71,7 @@ public sealed class Plugin : IDalamudPlugin
         MainWindow.Dispose();
         ModManagerWindow.Dispose();
         LibraryWindow.Dispose();
+        AddWindow.Dispose();
 
         Player.Dispose();
         Penumbra.Dispose();

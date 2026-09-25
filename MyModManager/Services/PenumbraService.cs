@@ -35,6 +35,7 @@ public sealed class PenumbraService : IDisposable
     private readonly GetAvailableModSettings getAvailableModSettings;
     private readonly GetModList getModList;
     private readonly GetChangedItemAdapterList getChangedItemAdapterList;
+    private readonly GetChangedItems getChangedItems;
     private readonly GetModPath getModPath;
     private readonly GetModDirectory getModDirectory;
     private readonly RedrawObject redrawObject;
@@ -82,6 +83,7 @@ public sealed class PenumbraService : IDisposable
         getAvailableModSettings = new GetAvailableModSettings(pi);
         getModList = new GetModList(pi);
         getChangedItemAdapterList = new GetChangedItemAdapterList(pi);
+        getChangedItems = new GetChangedItems(pi);
         getModPath = new GetModPath(pi);
         getModDirectory = new GetModDirectory(pi);
         redrawObject = new RedrawObject(pi);
@@ -477,6 +479,27 @@ public sealed class PenumbraService : IDisposable
             Svc.Log.Error(ex, $"Failed to read the Penumbra path for {modDirectory}.");
             return null;
         }
+    }
+
+    /// <summary>Names of the items one mod changes, e.g. "Emote: Sit on Ground".</summary>
+    public IReadOnlyCollection<string> GetChangedItemNames(string modDirectory)
+    {
+        try
+        {
+            return getChangedItems.Invoke(modDirectory, string.Empty)?.Keys.ToList() ?? new List<string>();
+        }
+        catch (Exception ex)
+        {
+            Svc.Log.Error(ex, $"Failed to read changed items for {modDirectory}.");
+            return new List<string>();
+        }
+    }
+
+    /// <summary>The mod's folder on disk, or null when Penumbra doesn't say where mods live.</summary>
+    public string? GetModFolder(string modDirectory)
+    {
+        var root = GetModRoot();
+        return string.IsNullOrEmpty(root) ? null : System.IO.Path.Combine(root, modDirectory);
     }
 
     /// <summary>Penumbra's root mod folder on disk.</summary>

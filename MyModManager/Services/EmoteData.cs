@@ -54,11 +54,16 @@ public sealed class EmoteData
     public IReadOnlyList<EmoteInfo> All { get; }
 
     public EmoteData(IDataManager data)
+        : this(data.GetExcelSheet<Emote>(), data.GetExcelSheet<ActionTimeline>())
+    {
+    }
+
+    /// <summary>Builds the lookups from the sheets directly (also used by offline tests).</summary>
+    public EmoteData(IEnumerable<Emote> emoteSheet, IEnumerable<ActionTimeline> timelineSheet)
     {
         var list = new List<EmoteInfo>();
-        var sheet = data.GetExcelSheet<Emote>();
 
-        foreach (var row in sheet)
+        foreach (var row in emoteSheet)
         {
             var name = row.Name.ExtractText();
             var textCommand = row.TextCommand.ValueNullable;
@@ -107,7 +112,7 @@ public sealed class EmoteData
         }
 
         All = list.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        IndexPoseTimelines(data);
+        IndexPoseTimelines(timelineSheet);
     }
 
     /// <summary>
@@ -115,7 +120,7 @@ public sealed class EmoteData
     /// File numbers are the numbers mod authors use: s_pose01 is "Sit1", and the unnumbered
     /// default is pose 0. Pose counts come from the same data.
     /// </summary>
-    private void IndexPoseTimelines(IDataManager data)
+    private void IndexPoseTimelines(IEnumerable<ActionTimeline> timelineSheet)
     {
         var prefixes = new (string Prefix, uint EmoteId)[]
         {
@@ -125,7 +130,7 @@ public sealed class EmoteData
         };
 
         var maxPose = new Dictionary<uint, int>();
-        foreach (var timeline in data.GetExcelSheet<ActionTimeline>())
+        foreach (var timeline in timelineSheet)
         {
             var key = timeline.Key.ExtractText();
             foreach (var (prefix, emoteId) in prefixes)

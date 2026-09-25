@@ -89,6 +89,21 @@ public sealed partial class LibraryWindow : Window, IDisposable
         rating = RatingFilter.Unsorted;
     }
 
+    /// <summary>Shows the given entries selected in their tab, e.g. right after adding them.</summary>
+    public void Reveal(IReadOnlyList<ManagedMod> mods)
+    {
+        if (mods.Count == 0)
+            return;
+        IsOpen = true;
+        requestTypeId = mods[0].ModTypeId;
+        ClearFilters();
+        selected.Clear();
+        foreach (var m in mods.Where(m => m.ModTypeId == mods[0].ModTypeId))
+            selected.Add(m.Id);
+        collapsed.Clear();
+        cacheKey = string.Empty;
+    }
+
     public override void Draw()
     {
         headingFont ??= Svc.PluginInterface.UiBuilder.FontAtlas.NewGameFontHandle(new GameFontStyle(GameFontFamily.Axis, 22f));
@@ -178,8 +193,8 @@ public sealed partial class LibraryWindow : Window, IDisposable
 
         ImGui.SameLine();
         if (ImGui.Button("+ Add"))
-            plugin.ModManagerWindow.IsOpen = true;
-        Theme.Hint("Add Penumbra mods (opens the current Add/Edit window until the new one is built).");
+            plugin.AddWindow.Open();
+        Theme.Hint("Add mods from Penumbra. Animations and poses are detected from the mod's files.");
 
         ImGui.SameLine();
         if (Theme.IconButton(FontAwesomeIcon.Cog, "settings", "Settings"))
@@ -267,7 +282,8 @@ public sealed partial class LibraryWindow : Window, IDisposable
                 if (tab.Success && activeTypeId != type.Id)
                 {
                     activeTypeId = type.Id;
-                    selected.Clear();
+                    if (requestTypeId != type.Id)
+                        selected.Clear();
                     categoryFilter = emoteFilter = positionFilter = string.Empty;
                     if (rating == RatingFilter.Unsorted && type.Style != ModTypeStyle.Animation && requestTypeId == null)
                         rating = RatingFilter.All;

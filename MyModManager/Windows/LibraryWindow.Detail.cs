@@ -173,8 +173,8 @@ public sealed partial class LibraryWindow
             plugin.Penumbra.OpenInPenumbra(mod.ModName);
         ImGui.SameLine();
         if (ImGui.Button("Change mod or option…"))
-            plugin.ModManagerWindow.BeginEdit(mod);
-        Theme.Hint("Opens the Add/Edit window on this entry, to point it at a different Penumbra mod or option.");
+            plugin.AddWindow.OpenForRebind(mod);
+        Theme.Hint("Point this entry at a different Penumbra mod or option.");
         ImGui.SameLine();
         DrawRemoveButton([mod]);
     }
