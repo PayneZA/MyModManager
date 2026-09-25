@@ -17,6 +17,11 @@ public sealed class PlayService : IDisposable
     private static readonly TimeSpan RedrawTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan SettleAfterRedraw = TimeSpan.FromMilliseconds(350);
     private static readonly TimeSpan CommandSpacing = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan EmoteSyncDelay = TimeSpan.FromSeconds(1);
+
+    // Simple Heels resets every on-screen character's emote animation (client-side) with this command.
+    private const string EmoteSyncRoot = "/heels";
+    private const string EmoteSyncCommand = "/heels emotesync";
 
     private readonly Configuration config;
     private readonly PenumbraService penumbra;
@@ -26,6 +31,7 @@ public sealed class PlayService : IDisposable
 
     private readonly Queue<string> queuedCommands = new();
     private DateTime nextCommandAt = DateTime.MinValue;
+    private DateTime? emoteSyncAt;
     private PendingPlay? pending;
 
     private sealed class PendingPlay(ManagedMod mod, DateTime deadline)
@@ -49,6 +55,22 @@ public sealed class PlayService : IDisposable
 
     /// <summary>True while waiting for a redraw before running an entry's emote.</summary>
     public bool IsBusy => pending != null;
+
+    /// <summary>True when Simple Heels is loaded, so its emote sync command can run.</summary>
+    public bool EmoteSyncAvailable => Svc.Commands.Commands.ContainsKey(EmoteSyncRoot);
+
+    /// <summary>Restarts every on-screen emote together, so paired animations line up.</summary>
+    public void EmoteSync()
+    {
+        emoteSyncAt = null;
+        if (!EmoteSyncAvailable)
+        {
+            Svc.PrintError("Emote sync needs the Simple Heels plugin.");
+            return;
+        }
+
+        Send(EmoteSyncCommand, null);
+    }
 
     public void Play(ManagedMod mod)
     {
@@ -104,6 +126,10 @@ public sealed class PlayService : IDisposable
             nextCommandAt = now + CommandSpacing;
             Send(queuedCommands.Dequeue(), null);
         }
+
+        // Sync once any pose changes have gone through, so it restarts the final pose.
+        if (emoteSyncAt is { } syncAt && now >= syncAt && queuedCommands.Count == 0)
+            EmoteSync();
     }
 
     private void Perform(ManagedMod mod)
@@ -118,20 +144,33 @@ public sealed class PlayService : IDisposable
             // Re-sending /groundsit while already on the ground stands the character up,
             // so cycle with /cpose instead when already in that pose family.
             if (TryCyclePoseInPlace(emote, pose))
+            {
+                ScheduleEmoteSync(mod);
                 return;
+            }
             SelectPose(emote, pose);
         }
 
         if (emote != null && config.SilentEmotes && !command.Contains(" motion", StringComparison.OrdinalIgnoreCase))
             command += " motion";
 
-        Send(command, mod);
+        if (Send(command, mod))
+            ScheduleEmoteSync(mod);
     }
 
-    private void Send(string command, ManagedMod? mod)
+    private void ScheduleEmoteSync(ManagedMod mod)
     {
-        if (!commands.TrySend(command, out var reason))
-            Svc.PrintError(mod == null ? reason : $"Couldn't play {mod.DisplayName}: {reason} Fix the command in the entry.");
+        if (mod.AutoEmoteSync && EmoteSyncAvailable)
+            emoteSyncAt = DateTime.UtcNow + EmoteSyncDelay + CommandSpacing * queuedCommands.Count;
+    }
+
+    private bool Send(string command, ManagedMod? mod)
+    {
+        if (commands.TrySend(command, out var reason))
+            return true;
+
+        Svc.PrintError(mod == null ? reason : $"Couldn't play {mod.DisplayName}: {reason} Fix the command in the entry.");
+        return false;
     }
 
     private static unsafe Character* LocalCharacter()

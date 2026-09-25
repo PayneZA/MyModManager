@@ -87,6 +87,7 @@ public static class FavoriteGrouping
             parts.Add("SFW");
 
         if (mod.IsTemp) parts.Add("Temp");
+        if (mod.AutoEmoteSync) parts.Add("Sync");
         if (mod.Tags != null)
         {
             foreach (var tag in mod.Tags)

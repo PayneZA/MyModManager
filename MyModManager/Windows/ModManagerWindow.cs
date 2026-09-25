@@ -35,6 +35,7 @@ public class ModManagerWindow : Window, IDisposable
     private ContentRatingFilter ratingFilter = ContentRatingFilter.All;
     private string sceneTagFilter = FavoriteGrouping.SceneTagAll;
     private int? newModPose;
+    private bool newModAutoEmoteSync;
     private string cachedModSearch = "\0";
     private int cachedModSearchVersion = -1;
     private List<KeyValuePair<string, string>> filteredPenumbraMods = new();
@@ -452,6 +453,15 @@ public class ModManagerWindow : Window, IDisposable
             ImGui.NextColumn();
 
             DrawCommandCheckAndPose();
+
+            ImGui.Text("Emote sync:");
+            ImGui.NextColumn();
+            using (ImRaii.Disabled(!plugin.Player.EmoteSyncAvailable))
+                ImGui.Checkbox("Sync after playing##autoEmoteSync", ref newModAutoEmoteSync);
+            ManagedModListUi.Hint(plugin.Player.EmoteSyncAvailable
+                ? "After Play, restart everyone's emote on screen so a couple's animation lines up.\nLeave off for dances you don't want synced."
+                : "Needs the Simple Heels plugin (/heels emotesync).");
+            ImGui.NextColumn();
         }
 
         ImGui.Columns(1);
@@ -501,6 +511,7 @@ public class ModManagerWindow : Window, IDisposable
                     plugin.Configuration.RememberTags(target.Tags);
                     target.AnimationCommand = newModAnimationCommand.Trim();
                     target.PoseNumber = newModIsAnimation ? newModPose : null;
+                    target.AutoEmoteSync = newModIsAnimation && newModAutoEmoteSync;
                     target.GroupName = selectedGroupName;
                     target.OptionName = selectedOptionName;
                     target.GroupType = selectedGroupType;
@@ -539,6 +550,7 @@ public class ModManagerWindow : Window, IDisposable
         newTagDraft = string.Empty;
         newModAnimationCommand = string.Empty;
         newModPose = null;
+        newModAutoEmoteSync = false;
         selectedGroupName = string.Empty;
         selectedOptionName = string.Empty;
         selectedGroupType = GroupType.Single;
@@ -613,6 +625,7 @@ public class ModManagerWindow : Window, IDisposable
         newTagDraft = string.Empty;
         newModAnimationCommand = mod.AnimationCommand;
         newModPose = mod.PoseNumber;
+        newModAutoEmoteSync = mod.AutoEmoteSync;
         selectedGroupName = mod.GroupName;
         selectedOptionName = mod.OptionName;
         selectedGroupType = mod.GroupType;

@@ -85,6 +85,14 @@ public class MainWindow : Window, IDisposable
         }
         ManagedModListUi.Hint("Turn off every Temp entry, and turn back on kept-on entries that were paused for them.");
 
+        if (plugin.Player.EmoteSyncAvailable)
+        {
+            ManagedModListUi.SameLineIfFits(110);
+            if (ImGui.Button("Emote sync"))
+                plugin.Player.EmoteSync();
+            ManagedModListUi.Hint("Restart everyone's emote on screen so paired animations line up (Simple Heels' /heels emotesync). Only you see the effect.");
+        }
+
         status.Draw();
 
         ImGui.Spacing();

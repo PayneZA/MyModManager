@@ -49,6 +49,9 @@ public class ManagedMod
 
     public bool ShouldSerializePose() => false;
 
+    /// <summary>After playing, re-sync everyone's emote animation on screen (Simple Heels' /heels emotesync).</summary>
+    public bool AutoEmoteSync { get; set; } = false;
+
     /// <summary>Single-choice groups only: the option selected to turn this entry off. Empty = auto-detect.</summary>
     public string OffOption { get; set; } = string.Empty;
 }
