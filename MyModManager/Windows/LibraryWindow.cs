@@ -151,6 +151,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
                     + Theme.ButtonWidth(tempLabel) + spacing
                     + (unsorted > 0 ? Theme.ButtonWidth(unsortedLabel) + spacing : 0)
                     + Theme.ButtonWidth("+ Add") + spacing
+                    + Theme.IconButtonSize(FontAwesomeIcon.QuestionCircle).X + spacing
                     + Theme.IconButtonSize(FontAwesomeIcon.Cog).X;
         ImGui.SameLine();
         Theme.RightAlign(width);
@@ -195,6 +196,10 @@ public sealed partial class LibraryWindow : Window, IDisposable
         if (ImGui.Button("+ Add"))
             plugin.AddWindow.Open();
         Theme.Hint("Add mods from Penumbra. Animations and poses are detected from the mod's files.");
+
+        ImGui.SameLine();
+        if (Theme.IconButton(FontAwesomeIcon.QuestionCircle, "help", "Help"))
+            plugin.HelpWindow.Open(selected.Count > 0 ? HelpTopic.Library : HelpTopic.GettingStarted);
 
         ImGui.SameLine();
         if (Theme.IconButton(FontAwesomeIcon.Cog, "settings", "Settings"))

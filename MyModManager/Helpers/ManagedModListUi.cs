@@ -220,7 +220,7 @@ public static class ManagedModListUi
             }
             ImGui.EndCombo();
         }
-        Hint("Filter by a scene tag assigned on Add/Edit.");
+        Hint("Filter by tag.");
     }
 }
 

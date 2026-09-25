@@ -13,7 +13,7 @@ public sealed class Plugin : IDalamudPlugin
 {
     private const string CommandName = "/mmm";
     private const string Usage =
-        "/mmm opens Favorites · /mmm manage · /mmm v2 (new Library preview) · /mmm on|off|toggle <shortcut> · /mmm play <shortcut or name> · /mmm temp off";
+        "/mmm opens the Library · /mmm add · /mmm help · /mmm play <name or shortcut> · /mmm on|off|toggle <shortcut> · /mmm temp off · /mmm favorites";
 
     public Configuration Configuration { get; }
     public EmoteData Emotes { get; }
@@ -24,9 +24,9 @@ public sealed class Plugin : IDalamudPlugin
 
     public WindowSystem WindowSystem { get; } = new("MyModManager");
     public MainWindow MainWindow { get; }
-    public ModManagerWindow ModManagerWindow { get; }
     public LibraryWindow LibraryWindow { get; }
     public AddWindow AddWindow { get; }
+    public HelpWindow HelpWindow { get; }
 
     public Plugin(IDalamudPluginInterface pluginInterface)
     {
@@ -43,13 +43,13 @@ public sealed class Plugin : IDalamudPlugin
         Player = new PlayService(Configuration, Penumbra, Entries, Emotes, Commands);
 
         MainWindow = new MainWindow(this);
-        ModManagerWindow = new ModManagerWindow(this);
         LibraryWindow = new LibraryWindow(this);
         AddWindow = new AddWindow(this);
+        HelpWindow = new HelpWindow(this);
         WindowSystem.AddWindow(MainWindow);
-        WindowSystem.AddWindow(ModManagerWindow);
         WindowSystem.AddWindow(LibraryWindow);
         WindowSystem.AddWindow(AddWindow);
+        WindowSystem.AddWindow(HelpWindow);
 
         Svc.Commands.AddHandler(CommandName, new CommandInfo(OnCommand) { HelpMessage = Usage });
 
@@ -69,9 +69,9 @@ public sealed class Plugin : IDalamudPlugin
 
         WindowSystem.RemoveAllWindows();
         MainWindow.Dispose();
-        ModManagerWindow.Dispose();
         LibraryWindow.Dispose();
         AddWindow.Dispose();
+        HelpWindow.Dispose();
 
         Player.Dispose();
         Penumbra.Dispose();
@@ -107,7 +107,7 @@ public sealed class Plugin : IDalamudPlugin
         var argList = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (argList.Length == 0)
         {
-            ToggleMainUi();
+            LibraryWindow.Toggle();
             return;
         }
 
@@ -116,12 +116,23 @@ public sealed class Plugin : IDalamudPlugin
 
         switch (action)
         {
-            case "manage":
-                ToggleManageUi();
+            case "manage" or "library" or "v2":
+                LibraryWindow.Toggle();
                 return;
 
-            case "v2" or "library":
-                LibraryWindow.Toggle();
+            case "add":
+                if (AddWindow.IsOpen)
+                    AddWindow.IsOpen = false;
+                else
+                    AddWindow.Open();
+                return;
+
+            case "help":
+                HelpWindow.Open(HelpTopic.GettingStarted);
+                return;
+
+            case "favorites" or "favourites" or "fav":
+                MainWindow.Toggle();
                 return;
 
             case "temp" when rest.Equals("off", StringComparison.OrdinalIgnoreCase):
@@ -181,6 +192,6 @@ public sealed class Plugin : IDalamudPlugin
         Svc.Print($"{label} turned {(enable ? "on" : "off")}.");
     }
 
-    private void ToggleManageUi() => ModManagerWindow.Toggle();
-    private void ToggleMainUi() => MainWindow.Toggle();
+    private void ToggleManageUi() => LibraryWindow.Toggle();
+    private void ToggleMainUi() => LibraryWindow.Toggle();
 }

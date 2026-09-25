@@ -173,8 +173,11 @@ public sealed class AddWindow : Window, IDisposable
 
     private void DrawModList()
     {
-        ImGui.SetNextItemWidth(-1);
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - Theme.IconButtonSize(FontAwesomeIcon.QuestionCircle).X - ImGui.GetStyle().ItemSpacing.X);
         ImGui.InputTextWithHint("###modSearch", $"Search {plugin.Penumbra.ModList.Count} Penumbra mods…", ref search, 128);
+        ImGui.SameLine();
+        if (Theme.IconButton(FontAwesomeIcon.QuestionCircle, "help", "How adding works"))
+            plugin.HelpWindow.Open(HelpTopic.Adding);
 
         var viewIndex = (int)view;
         var newCount = unlisted?.Count;

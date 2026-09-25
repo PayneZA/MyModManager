@@ -65,9 +65,9 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Text("Favorites");
         ImGui.SameLine(ImGui.GetContentRegionMax().X - 90);
-        if (ImGui.Button("Add/Edit"))
-            plugin.ModManagerWindow.IsOpen = true;
-        ManagedModListUi.Hint("Open Add/Edit to add, edit, or star mods. Also /mmm manage.");
+        if (ImGui.Button("Library"))
+            plugin.LibraryWindow.IsOpen = true;
+        ManagedModListUi.Hint("Open the Library to add, edit or star entries. Also /mmm.");
 
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##favSearch", "Search Favorites...", ref favoriteModSearchText, 100);
@@ -104,7 +104,7 @@ public class MainWindow : Window, IDisposable
 
             if (!plugin.Configuration.ManagedMods.Exists(m => m.IsFavorite))
             {
-                ImGui.TextWrapped("Nothing starred yet. Click Add/Edit (or /mmm manage) to add a Penumbra mod, then star it to see it here.");
+                ImGui.TextWrapped("Nothing starred yet. Open the Library (/mmm) and star entries to see them here.");
             }
             else if (groupedFavorites.Count == 0)
             {
@@ -157,7 +157,7 @@ public class MainWindow : Window, IDisposable
             plugin.Configuration.Save();
         }
         ImGui.PopStyleColor();
-        ManagedModListUi.Hint(mod.IsFavorite ? "Unstar: hides this from Favorites. It stays in Add/Edit." : "Star: show this on Favorites.");
+        ManagedModListUi.Hint(mod.IsFavorite ? "Unstar: hides this from Favorites. It stays in the Library." : "Star: show this on Favorites.");
 
         ImGui.PopID();
     }
