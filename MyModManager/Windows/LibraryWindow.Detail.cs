@@ -18,6 +18,11 @@ public sealed partial class LibraryWindow
     private string newTag = string.Empty;
     private string newFolder = string.Empty;
 
+    // Pick-one detail: label editor, and the text of whichever name field is being typed in.
+    private bool editingLabels;
+    private string? draftKey;
+    private string draft = string.Empty;
+
     // Mod type editor state
     private bool editorRequested;
     private bool editorOpen;
@@ -41,7 +46,7 @@ public sealed partial class LibraryWindow
 
         var type = ActiveType;
         var isPickGroup = type.Style == ModTypeStyle.Pick && entries.Count > 1 && entries.All(m => m.OptionName.Length > 0)
-                          && entries.Select(m => (m.ModName, m.GroupName)).Distinct().Count() == 1;
+                          && entries.Select(PickKey).Distinct().Count() == 1;
         if (isPickGroup)
             DrawPickDetail(entries);
         else if (entries.Count > 1)
@@ -274,16 +279,10 @@ public sealed partial class LibraryWindow
     {
         var first = mods[0].Rating;
         var same = mods.All(m => m.Rating == first);
-        var index = !same ? -1 : first switch { ContentRating.Sfw => 0, ContentRating.Nsfw => 1, _ => -1 };
-        if (Theme.Segmented("rating", ["SFW", "NSFW"], ref index, [(Theme.Sfw, Theme.SfwBg), (Theme.Nsfw, Theme.NsfwBg)]))
-            SetAll(mods, m => m.Rating = index == 0 ? ContentRating.Sfw : ContentRating.Nsfw);
-        if (same && first == ContentRating.Unrated)
-        {
-            ImGui.SameLine();
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Unsorted, "Unsorted");
-        }
-        else if (!same)
+        var index = !same ? -1 : first switch { ContentRating.Sfw => 0, ContentRating.Nsfw => 1, _ => 2 };
+        if (Theme.Segmented("rating", ["SFW", "NSFW", "Unsorted"], ref index, [(Theme.Sfw, Theme.SfwBg), (Theme.Nsfw, Theme.NsfwBg), (Theme.Unsorted, Theme.UnsortedBg)]))
+            SetAll(mods, m => m.Rating = index switch { 0 => ContentRating.Sfw, 1 => ContentRating.Nsfw, _ => ContentRating.Unrated });
+        if (!same)
         {
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
@@ -560,19 +559,41 @@ public sealed partial class LibraryWindow
 
     private void DrawPickDetail(List<ManagedMod> mods)
     {
+        // Members in switch order, so the editor lists options the way the row shows them.
+        var configOrder = Config.ManagedMods.Select((m, i) => (m.Id, i)).ToDictionary(p => p.Id, p => p.i);
+        mods = mods.OrderBy(m => m.OptionOrder).ThenBy(m => configOrder.GetValueOrDefault(m.Id)).ToList();
+        var groups = PickGroupNames(mods);
+        var linked = groups.Count > 1;
+
         Heading(PickName(mods));
-        ImGui.TextDisabled($"Penumbra: {mods[0].ModName} / {mods[0].GroupName}");
+        ImGui.TextDisabled(linked
+            ? $"Penumbra: {mods[0].ModName} · sets {string.Join(", ", groups)}"
+            : $"Penumbra: {mods[0].ModName} / {mods[0].GroupName}");
         ImGui.Spacing();
 
-        using (var box = ImRaii.Child("###pickBox", new Vector2(0, ImGui.GetFrameHeight() * 2.3f), true))
+        var choices = PickChoices(mods, includeHidden: true);
+        var boxRows = editingLabels ? choices.Count + 1 : 2;
+        var boxHeight = ImGui.GetFrameHeightWithSpacing() * boxRows + ImGui.GetStyle().WindowPadding.Y * 2;
+        using (var box = ImRaii.Child("###pickBox", new Vector2(0, boxHeight), true, ImGuiWindowFlags.NoScrollbar))
         {
             if (box)
             {
-                Theme.Label("Selected option");
-                DrawPickSwitch(mods, mods.Select(PickOptionLabel).ToList());
+                ImGui.AlignTextToFramePadding();
+                Theme.Label(editingLabels ? "Options" : "Selected option");
+                ImGui.SameLine();
+                Theme.RightAlign(Theme.ButtonWidth(editingLabels ? "Done" : "Edit labels"));
+                if (Theme.Chip(editingLabels ? "Done###editLabels" : "Edit labels###editLabels", editingLabels))
+                    editingLabels = !editingLabels;
+                Theme.Hint("Rename, reorder or hide the options. Penumbra keeps its own names.");
+
+                if (editingLabels)
+                    DrawOptionEditor(mods, choices);
+                else
+                    DrawPickSwitch(mods);
             }
         }
-        ImGui.TextDisabled("Picking an option selects it in Penumbra. Each option is its own entry, so shortcuts keep working.");
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Dim))
+            ImGui.TextWrapped("Picking an option selects it in Penumbra. Renamed labels are only shown here; Penumbra keeps its names.");
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -584,6 +605,10 @@ public sealed partial class LibraryWindow
             {
                 ImGui.TableSetupColumn("label", ImGuiTableColumnFlags.WidthFixed, Theme.Scaled(96));
                 ImGui.TableSetupColumn("value", ImGuiTableColumnFlags.WidthStretch);
+                FieldRow("Name", () => PickNameField(mods, linked));
+                var candidates = LinkCandidates(mods, groups);
+                if (linked || candidates.Count > 0)
+                    FieldRow("Linked", () => LinkField(mods, groups, candidates));
                 FieldRow("Rating", () => RatingField(mods));
                 FieldRow("Category", () => VocabularyCombo("category", Same(mods, m => m.Category), type.Categories, ref newCategory, v => SetAll(mods, m => m.Category = v), v => AddCategory(type, v)));
                 FieldRow("Mod type", () => ModTypeCombo(mods));
@@ -597,6 +622,187 @@ public sealed partial class LibraryWindow
             plugin.Penumbra.OpenInPenumbra(mods[0].ModName);
         ImGui.SameLine();
         DrawRemoveButton(mods);
+    }
+
+    /// <summary>
+    /// A text field that commits on Enter or when it loses focus, so names can be typed freely
+    /// (the shown value is trimmed and re-derived from the entries every frame).
+    /// </summary>
+    private bool DraftInput(string key, string current, float width, out string committed)
+    {
+        var value = draftKey == key ? draft : current;
+        ImGui.SetNextItemWidth(width);
+        ImGui.InputText($"###{key}", ref value, 80);
+        if (ImGui.IsItemActive())
+        {
+            draftKey = key;
+            draft = value;
+        }
+        committed = value.Trim();
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            draftKey = null;
+            return committed.Length > 0 && committed != current;
+        }
+        if (draftKey == key && !ImGui.IsItemActive())
+            draftKey = null;
+        return false;
+    }
+
+    /// <summary>" - " separates the group name from the option label in DisplayName.</summary>
+    private static string CleanPickText(string text) => text.Replace(" - ", " – ");
+
+    private void PickNameField(List<ManagedMod> mods, bool linked)
+    {
+        if (!DraftInput("pickName", PickName(mods), -1, out var name))
+            return;
+        name = CleanPickText(name);
+        if (linked)
+            SetAll(mods, m => m.PickLink = name);
+        else
+            SetAll(mods, m => m.DisplayName = $"{name} - {PickOptionLabel(m)}");
+    }
+
+    private static void SetOptionLabel(ManagedMod target, List<ManagedMod> mods, string label)
+    {
+        var prefix = GroupTitle(mods.Where(m => m.GroupName == target.GroupName).ToList());
+        target.DisplayName = $"{prefix} - {CleanPickText(label)}";
+    }
+
+    /// <summary>One row per option: label, Penumbra's name, move up/down, hide.</summary>
+    private void DrawOptionEditor(List<ManagedMod> mods, List<(string Label, List<ManagedMod> Targets)> choices)
+    {
+        var buttons = Theme.IconButtonSize(FontAwesomeIcon.Eye).X * 4 + ImGui.GetStyle().ItemSpacing.X * 3;
+        for (var i = 0; i < choices.Count; i++)
+        {
+            var (label, targets) = choices[i];
+            var original = targets[0].OptionName;
+            var hidden = targets.All(t => t.OptionHidden);
+            using var id = ImRaii.PushId(i);
+
+            if (DraftInput($"label{targets[0].Id}", label, Theme.Scaled(150), out var newLabel))
+            {
+                foreach (var t in targets)
+                    SetOptionLabel(t, mods, newLabel);
+                Config.Save();
+            }
+            ImGui.SameLine();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(hidden ? Theme.Faint : Theme.Dim, hidden ? $"← {original} · hidden" : $"← {original}");
+
+            ImGui.SameLine();
+            Theme.RightAlign(buttons);
+            using (ImRaii.Disabled(label == original))
+            {
+                if (Theme.IconButton(FontAwesomeIcon.Undo, "reset", $"Go back to Penumbra's name, \"{original}\".", subtle: true))
+                {
+                    foreach (var t in targets)
+                        SetOptionLabel(t, mods, t.OptionName);
+                    Config.Save();
+                }
+            }
+            ImGui.SameLine();
+            using (ImRaii.Disabled(i == 0))
+            {
+                if (Theme.IconButton(FontAwesomeIcon.ArrowUp, "up", "Move left in the switch.", subtle: true))
+                    MoveChoice(choices, i, i - 1);
+            }
+            ImGui.SameLine();
+            using (ImRaii.Disabled(i == choices.Count - 1))
+            {
+                if (Theme.IconButton(FontAwesomeIcon.ArrowDown, "down", "Move right in the switch.", subtle: true))
+                    MoveChoice(choices, i, i + 1);
+            }
+            ImGui.SameLine();
+            if (Theme.IconButton(hidden ? FontAwesomeIcon.EyeSlash : FontAwesomeIcon.Eye, "hide",
+                    hidden ? "Hidden from the switch. Click to show it." : "Hide from the switch. Shortcuts still work.",
+                    hidden ? Theme.Faint : null, subtle: !hidden))
+            {
+                foreach (var t in targets)
+                    t.OptionHidden = !hidden;
+                Config.Save();
+            }
+        }
+    }
+
+    private void MoveChoice(List<(string Label, List<ManagedMod> Targets)> choices, int from, int to)
+    {
+        (choices[from], choices[to]) = (choices[to], choices[from]);
+        for (var k = 0; k < choices.Count; k++)
+        {
+            foreach (var t in choices[k].Targets)
+                t.OptionOrder = k + 1;
+        }
+        Config.Save();
+    }
+
+    /// <summary>
+    /// Other option groups of the same mod in this tab with exactly the same options, e.g. a second
+    /// garment that also has Erect / Flaccid. Those can share one switch.
+    /// </summary>
+    private List<List<ManagedMod>> LinkCandidates(List<ManagedMod> mods, List<string> groups)
+    {
+        var options = mods.Select(m => m.OptionName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Config.ManagedMods
+            .Where(m => m.ModTypeId == mods[0].ModTypeId && m.OptionName.Length > 0
+                        && m.ModName.Equals(mods[0].ModName, StringComparison.OrdinalIgnoreCase) && !groups.Contains(m.GroupName))
+            .GroupBy(m => m.GroupName)
+            .Select(g => g.ToList())
+            .Where(g => g.Select(m => m.OptionName).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(options))
+            .ToList();
+    }
+
+    /// <summary>Lit chips are the linked groups (click to unlink one); dim "+" chips can join.</summary>
+    private void LinkField(List<ManagedMod> mods, List<string> groups, List<List<ManagedMod>> candidates)
+    {
+        var linked = groups.Count > 1;
+        for (var i = 0; linked && i < groups.Count; i++)
+        {
+            if (i > 0)
+                ImGui.SameLine();
+            if (Theme.Chip($"{groups[i]}  ×###linked{i}", true, Theme.Text, Theme.FrameActive))
+            {
+                var leaving = mods.Where(m => m.GroupName == groups[i]).ToList();
+                var staying = mods.Except(leaving).ToList();
+                // A link of one group is no link: unlinking the second-last group unlinks both.
+                if (groups.Count == 2)
+                    leaving = mods;
+                SetAll(leaving, m => m.PickLink = string.Empty);
+                selected.Clear();
+                foreach (var m in staying)
+                    selected.Add(m.Id);
+                status.Set($"Unlinked {groups[i]}.");
+                return;
+            }
+            Theme.Hint($"Unlink {groups[i]} so it gets its own switch again.");
+        }
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            if (linked || i > 0)
+                ImGui.SameLine();
+            var group = candidates[i];
+            if (Theme.Chip($"+ {group[0].GroupName}###link{i}", false))
+            {
+                var name = linked ? mods[0].PickLink : UniqueLinkName(mods[0].ModName);
+                SetAll(mods.Concat(group).ToList(), m => m.PickLink = name);
+                foreach (var m in group)
+                    selected.Add(m.Id);
+                status.Set($"Linked {group[0].GroupName}: one switch now sets {groups.Count + 1} groups.");
+                return;
+            }
+            Theme.Hint($"Link with {group[0].GroupName}: it has the same options, so one switch can set both.");
+        }
+    }
+
+    private string UniqueLinkName(string modName)
+    {
+        var taken = Config.ManagedMods.Where(m => m.ModName.Equals(modName, StringComparison.OrdinalIgnoreCase)).Select(m => m.PickLink)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var name = "State";
+        for (var n = 2; taken.Contains(name); n++)
+            name = $"State {n}";
+        return name;
     }
 
     // ------------------------------------------------------------------ mod type editor

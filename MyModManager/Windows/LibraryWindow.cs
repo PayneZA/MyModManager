@@ -21,7 +21,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
 {
     private enum RatingFilter { All, Sfw, Nsfw, Unsorted }
 
-    private enum RowKind { Header, Entry, PickGroup }
+    private enum RowKind { Header, Entry, PickGroup, ModParent }
 
     private sealed class Row
     {
@@ -32,6 +32,12 @@ public sealed partial class LibraryWindow : Window, IDisposable
         public List<ManagedMod> Members = new();
         public int Count;
         public int OnCount;
+
+        /// <summary>Option groups drawn under their mod.</summary>
+        public bool Indent;
+
+        /// <summary>Set on a mod's parent row: the <c>collapsed</c> key that folds its option groups.</summary>
+        public string? FoldKey;
     }
 
     private static readonly string[] GroupIds = ["folder", "emote", "category", "position", "none"];
@@ -208,7 +214,6 @@ public sealed partial class LibraryWindow : Window, IDisposable
 
         if (Config.SafeView)
             ImGui.TextColored(Theme.Sfw, "Safe view is on · NSFW and unsorted entries are hidden");
-        status.Draw();
     }
 
     private void DrawSettingsPopup()
@@ -398,6 +403,13 @@ public sealed partial class LibraryWindow : Window, IDisposable
         }
 
         ImGui.Separator();
+        // The status message takes over the footer line while it shows, so it never moves anything.
+        if (status.Current is { } message)
+        {
+            ImGui.TextUnformatted(message);
+            return;
+        }
+
         var onCount = visibleEntries.Count(m => plugin.Entries.IsOn(m) == true);
         ImGui.TextDisabled($"{visibleEntries.Count} of {typeTotal} shown · {onCount} on");
         if (selected.Count > 0)
@@ -484,7 +496,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
             if (categoryFilter.Length > 0 && !m.Category.Equals(categoryFilter, StringComparison.OrdinalIgnoreCase)) return false;
             if (positionFilter.Length > 0 && !m.Position.Equals(positionFilter, StringComparison.OrdinalIgnoreCase)) return false;
             if (words.Length == 0) return true;
-            var haystack = $"{m.DisplayName} {m.ModName} {m.GroupName} {m.OptionName} {m.AnimationCommand} {m.Category} {m.Position} {FolderOf(m)} {string.Join(' ', m.Tags)}";
+            var haystack = $"{m.DisplayName} {m.ModName} {m.GroupName} {m.OptionName} {m.PickLink} {m.AnimationCommand} {m.Category} {m.Position} {FolderOf(m)} {string.Join(' ', m.Tags)}";
             return words.All(w => haystack.Contains(w, StringComparison.OrdinalIgnoreCase));
         }).ToList();
 
@@ -521,24 +533,53 @@ public sealed partial class LibraryWindow : Window, IDisposable
         }
     }
 
-    /// <summary>Pick-one tabs show entries that share a mod and option group as one switch row.</summary>
+    /// <summary>
+    /// Pick-one tabs show entries that share a mod and option group (or a link) as one switch row.
+    /// When a mod has its whole-mod entry or several groups visible, the groups sit indented under it.
+    /// </summary>
     private void AddPickRows(List<ManagedMod> members)
     {
-        foreach (var bundle in members.GroupBy(m => string.IsNullOrEmpty(m.OptionName) ? m.Id : $"{m.ModName}\u0001{m.GroupName}"))
+        var configOrder = Config.ManagedMods.Select((m, i) => (m.Id, i)).ToDictionary(p => p.Id, p => p.i);
+        var clusters = members.GroupBy(m => m.ModName, StringComparer.OrdinalIgnoreCase).Select(mod =>
         {
-            var list = bundle.ToList();
-            if (list.Count == 1 && string.IsNullOrEmpty(list[0].OptionName))
-            {
-                rows.Add(new Row { Kind = RowKind.Entry, Key = list[0].Id, Mod = list[0] });
-                continue;
-            }
+            var wholes = mod.Where(m => m.OptionName.Length == 0).ToList();
+            var bundles = mod.Where(m => m.OptionName.Length > 0)
+                .GroupBy(PickKey)
+                .Select(b => b.OrderBy(m => m.OptionOrder).ThenBy(m => configOrder.GetValueOrDefault(m.Id)).ToList())
+                .OrderBy(b => PickName(b), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var sortName = wholes.Count > 0 ? wholes[0].DisplayName : PickName(bundles[0]);
+            return (Name: mod.Key, Wholes: wholes, Bundles: bundles, SortName: sortName);
+        }).OrderBy(c => c.SortName, StringComparer.OrdinalIgnoreCase);
 
-            rows.Add(new Row { Kind = RowKind.PickGroup, Key = "pick:" + bundle.Key, Label = PickName(list), Members = list, Mod = list[0] });
+        foreach (var (name, wholes, bundles, _) in clusters)
+        {
+            var nested = bundles.Count > 0 && (wholes.Count > 0 || bundles.Count > 1);
+            var foldKey = "mod:" + name;
+            if (nested && wholes.Count == 0)
+                rows.Add(new Row { Kind = RowKind.ModParent, Key = foldKey, Label = name, FoldKey = foldKey });
+            for (var i = 0; i < wholes.Count; i++)
+                rows.Add(new Row { Kind = RowKind.Entry, Key = wholes[i].Id, Mod = wholes[i], FoldKey = nested && i == 0 ? foldKey : null });
+
+            if (nested && collapsed.Contains(foldKey))
+                continue;
+            foreach (var list in bundles)
+                rows.Add(new Row { Kind = RowKind.PickGroup, Key = "pick:" + PickKey(list[0]), Label = PickName(list), Members = list, Mod = list[0], Indent = nested });
         }
     }
 
-    /// <summary>"Physics - Clothed" + "Physics - Nude" are shown as "Physics".</summary>
+    private static string PickKey(ManagedMod m) =>
+        m.PickLink.Length > 0 ? $"{m.ModName}\u0001link\u0001{m.PickLink}" : $"{m.ModName}\u0001{m.GroupName}";
+
+    /// <summary>The switch's name: the link name, else the option group's name.</summary>
     private static string PickName(List<ManagedMod> members)
+    {
+        var link = members[0].PickLink;
+        return link.Length > 0 && members.All(m => m.PickLink == link) ? link : GroupTitle(members);
+    }
+
+    /// <summary>"Physics - Clothed" + "Physics - Nude" are shown as "Physics".</summary>
+    private static string GroupTitle(List<ManagedMod> members)
     {
         var prefixes = members.Select(m => m.DisplayName.Split(" - ", 2)[0].Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         return prefixes.Count == 1 && members.All(m => m.DisplayName.Contains(" - ")) ? prefixes[0] : members[0].GroupName;
@@ -548,6 +589,25 @@ public sealed partial class LibraryWindow : Window, IDisposable
     {
         var parts = mod.DisplayName.Split(" - ", 2);
         return parts.Length == 2 ? parts[1].Trim() : mod.OptionName;
+    }
+
+    /// <summary>
+    /// The switch's buttons, in order. Options with the same label are one button, so a linked
+    /// switch's "Erect" sets that option in every linked group.
+    /// </summary>
+    private static List<(string Label, List<ManagedMod> Targets)> PickChoices(List<ManagedMod> members, bool includeHidden = false)
+    {
+        var choices = new List<(string Label, List<ManagedMod> Targets)>();
+        foreach (var m in members.Where(m => includeHidden || !m.OptionHidden))
+        {
+            var label = PickOptionLabel(m);
+            var i = choices.FindIndex(c => c.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
+            if (i < 0)
+                choices.Add((label, [m]));
+            else
+                choices[i].Targets.Add(m);
+        }
+        return choices;
     }
 
     private string GroupKey(ManagedMod m, string groupBy, ModType type) => groupBy switch
@@ -618,7 +678,8 @@ public sealed partial class LibraryWindow : Window, IDisposable
                 {
                     case RowKind.Header: DrawHeaderRow(row); break;
                     case RowKind.PickGroup: DrawPickRow(row); break;
-                    default: DrawEntryRow(row.Mod!); break;
+                    case RowKind.ModParent: DrawModParentRow(row); break;
+                    default: DrawEntryRow(row.Mod!, row.FoldKey); break;
                 }
             }
         }
@@ -667,7 +728,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
             Theme.U32(Theme.RatingColor(rating)), Theme.Scaled(2));
     }
 
-    private void DrawEntryRow(ManagedMod mod)
+    private void DrawEntryRow(ManagedMod mod, string? foldKey = null)
     {
         var type = Config.ModTypeOf(mod);
         var h = ImGui.GetFrameHeight();
@@ -681,6 +742,11 @@ public sealed partial class LibraryWindow : Window, IDisposable
         DrawRatingBar(start, mod.Rating);
 
         ImGui.SetCursorScreenPos(start + new Vector2(Theme.Scaled(10), 0));
+        if (foldKey != null)
+        {
+            DrawFoldCaret(foldKey, h);
+            ImGui.SameLine(0, Theme.Scaled(2));
+        }
         DrawOnToggle(mod, h);
         ImGui.SetCursorScreenPos(new Vector2(ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X, start.Y));
 
@@ -769,18 +835,56 @@ public sealed partial class LibraryWindow : Window, IDisposable
             : mod.IsTemp ? "Temporary: turned off by \"Turn off temporary\"." : "Kept on until you turn it off.");
     }
 
-    private void DrawPickRow(Row row)
+    /// <summary>A ▸/▾ that folds a mod's option groups.</summary>
+    private void DrawFoldCaret(string foldKey, float rowHeight)
+    {
+        var isCollapsed = collapsed.Contains(foldKey);
+        var pos = ImGui.GetCursorScreenPos();
+        var size = new Vector2(Theme.Scaled(14), rowHeight);
+        if (ImGui.InvisibleButton("###fold", size))
+        {
+            if (!collapsed.Add(foldKey))
+                collapsed.Remove(foldKey);
+        }
+        Theme.Hint(isCollapsed ? "Show this mod's option groups." : "Hide this mod's option groups.");
+        var icon = (isCollapsed ? FontAwesomeIcon.CaretRight : FontAwesomeIcon.CaretDown).ToIconString();
+        var color = ImGui.IsItemHovered() ? Theme.Text : Theme.Dim;
+        ImGui.GetWindowDrawList().AddText(UiBuilder.IconFont, ImGui.GetFontSize(),
+            new Vector2(pos.X + Theme.Scaled(2), pos.Y + (rowHeight - ImGui.GetTextLineHeight()) / 2), Theme.U32(color), icon);
+    }
+
+    /// <summary>Stands in for a mod whose whole-mod entry isn't in the list, above its option groups.</summary>
+    private void DrawModParentRow(Row row)
     {
         var h = ImGui.GetFrameHeight();
         var start = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(start + new Vector2(Theme.Scaled(10), 0));
+        DrawFoldCaret(row.FoldKey!, h);
+        ImGui.GetWindowDrawList().AddText(new Vector2(ImGui.GetItemRectMax().X + Theme.Scaled(4), start.Y + (h - ImGui.GetTextLineHeight()) / 2),
+            Theme.U32(Theme.Dim), row.Label);
+    }
+
+    private void DrawPickRow(Row row)
+    {
+        var h = ImGui.GetFrameHeight();
+        var dl = ImGui.GetWindowDrawList();
+        if (row.Indent)
+        {
+            // A faint guide line ties the group to the mod row above it.
+            var origin = ImGui.GetCursorScreenPos();
+            var guideX = origin.X + Theme.Scaled(17);
+            dl.AddLine(new Vector2(guideX, origin.Y - Theme.Scaled(2)), new Vector2(guideX, origin.Y + h), Theme.U32(Theme.Border), Theme.Scaled(1.5f));
+            ImGui.SetCursorScreenPos(origin + new Vector2(Theme.Scaled(18), 0));
+        }
+
+        var start = ImGui.GetCursorScreenPos();
         var width = ImGui.GetContentRegionAvail().X;
         var isSelected = row.Members.All(m => selected.Contains(m.Id));
-        var dl = ImGui.GetWindowDrawList();
         if (isSelected)
             dl.AddRectFilled(start, start + new Vector2(width, h), Theme.U32(Theme.Selected), Theme.Scaled(4));
         DrawRatingBar(start, row.Members.Max(m => m.Rating == ContentRating.Unrated ? ContentRating.Unrated : m.Rating));
 
-        var labels = row.Members.Select(PickOptionLabel).ToList();
+        var labels = PickChoices(row.Members).Select(c => c.Label).ToList();
         var spacing = Theme.Scaled(2);
         var segWidth = labels.Sum(l => Theme.ButtonWidth(l)) + spacing * (labels.Count - 1);
         var nameWidth = Math.Max(Theme.Scaled(40), width - Theme.Scaled(12) - segWidth - ImGui.GetStyle().ItemSpacing.X);
@@ -794,25 +898,42 @@ public sealed partial class LibraryWindow : Window, IDisposable
                 selected.Add(m.Id);
             anchorId = row.Members[0].Id;
         }
+        var groups = PickGroupNames(row.Members);
+        if (ImGui.IsItemHovered() && groups.Count > 1)
+            ImGui.SetTooltip($"Linked: sets {string.Join(", ", groups)} together.");
         var min = ImGui.GetItemRectMin();
-        dl.AddText(new Vector2(min.X + Theme.Scaled(4), min.Y + (h - ImGui.GetTextLineHeight()) / 2), Theme.U32(Theme.Text), row.Label);
+        var textX = min.X + Theme.Scaled(4);
+        var textY = min.Y + (h - ImGui.GetTextLineHeight()) / 2;
+        if (groups.Count > 1)
+        {
+            dl.AddText(UiBuilder.IconFont, ImGui.GetFontSize() * 0.8f, new Vector2(textX, textY + Theme.Scaled(1)), Theme.U32(Theme.Dim), FontAwesomeIcon.Link.ToIconString());
+            textX += Theme.Scaled(18);
+        }
+        dl.AddText(new Vector2(textX, textY), Theme.U32(Theme.Text), row.Label);
 
         ImGui.SameLine();
-        DrawPickSwitch(row.Members, labels);
+        DrawPickSwitch(row.Members);
     }
 
-    /// <summary>One button per option; the lit one is the option currently selected in Penumbra.</summary>
-    private void DrawPickSwitch(List<ManagedMod> members, List<string> labels)
+    private static List<string> PickGroupNames(List<ManagedMod> members) =>
+        members.Select(m => m.GroupName).Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// One button per option; the lit one is selected in Penumbra. A linked switch lights a button
+    /// only when every linked group has that option, and clicking it sets them all.
+    /// </summary>
+    private void DrawPickSwitch(List<ManagedMod> members)
     {
-        var current = members.FindIndex(m => plugin.Entries.IsOn(m) == true);
-        var index = current;
+        var choices = PickChoices(members);
+        var groups = PickGroupNames(members);
+        var index = choices.FindIndex(c => groups.All(g => c.Targets.Any(t => t.GroupName == g && plugin.Entries.IsOn(t) == true)));
         using (ImRaii.Disabled(!plugin.Penumbra.Available))
         {
-            if (Theme.Segmented("switch", labels, ref index) && index >= 0)
+            if (Theme.Segmented("switch", choices.Select(c => c.Label).ToList(), ref index) && index >= 0)
             {
-                var target = members[index];
-                plugin.Entries.Apply([target], true);
-                status.Set($"{PickName(members)}: {labels[index]}.");
+                var (label, targets) = choices[index];
+                plugin.Entries.Apply(targets, true);
+                status.Set(groups.Count > 1 ? $"{PickName(members)}: {label} ({groups.Count} groups)." : $"{PickName(members)}: {label}.");
             }
         }
     }
@@ -822,7 +943,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
         var io = ImGui.GetIO();
         if (io.KeyShift && anchorId != null)
         {
-            var order = rows.Where(r => r.Kind != RowKind.Header).SelectMany(r => r.Kind == RowKind.PickGroup ? r.Members.Select(m => m.Id) : new[] { r.Key }).ToList();
+            var order = rows.Where(r => r.Kind is not (RowKind.Header or RowKind.ModParent)).SelectMany(r => r.Kind == RowKind.PickGroup ? r.Members.Select(m => m.Id) : new[] { r.Key }).ToList();
             var a = order.IndexOf(anchorId);
             var b = order.IndexOf(id);
             if (a >= 0 && b >= 0)

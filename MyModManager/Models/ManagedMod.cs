@@ -51,6 +51,18 @@ public class ManagedMod
     public string OptionName { get; set; } = string.Empty;
     public GroupType GroupType { get; set; } = GroupType.Single;
 
+    /// <summary>Pick-one tabs: leave this option out of its switch (it still works from shortcuts).</summary>
+    public bool OptionHidden { get; set; } = false;
+
+    /// <summary>Pick-one tabs: button position in its switch. 0 everywhere = Penumbra's order.</summary>
+    public int OptionOrder { get; set; } = 0;
+
+    /// <summary>
+    /// Pick-one tabs: option entries of the same mod sharing this name form one linked switch that
+    /// sets every group at once, e.g. "State" over two garments with Erect/Flaccid. Empty = not linked.
+    /// </summary>
+    public string PickLink { get; set; } = string.Empty;
+
     /// <summary>
     /// Which pose of sit / ground sit / doze this entry replaces, numbered the way mod names
     /// do ("Sit1", "Gsit2"): 0 is the default pose, 1 the first alternate. Null = any pose.

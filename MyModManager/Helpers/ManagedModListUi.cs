@@ -51,9 +51,12 @@ public sealed class StatusLine
         until = DateTime.UtcNow.AddSeconds(seconds);
     }
 
+    /// <summary>The message while it is showing, otherwise null.</summary>
+    public string? Current => text != null && DateTime.UtcNow < until ? text : null;
+
     public void Draw()
     {
-        if (text != null && DateTime.UtcNow < until)
-            ImGui.TextDisabled(text);
+        if (Current is { } message)
+            ImGui.TextDisabled(message);
     }
 }
