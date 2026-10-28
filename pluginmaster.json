@@ -3,7 +3,7 @@
     "Author": "PayneZA",
     "Name": "My Mod Manager",
     "InternalName": "MyModManager",
-    "AssemblyVersion": "2.0.0.0",
+    "AssemblyVersion": "2.1.0.0",
     "Description": "An animation mode for Penumbra: a library of your roleplay animation mods (and any other mods) with the exact emote and pose to use, one-click Play, file-based detection of emotes and poses, pack splitting, SFW/NSFW sorting and Safe view. Unofficial, made for the author and close friends; no official support.",
     "ApplicableVersion": "any",
     "Tags": [
@@ -22,9 +22,9 @@
     "Punchline": "An animation mode for Penumbra: find, sort and play your animation mods.",
     "AcceptsFeedback": true,
     "RepoUrl": "https://github.com/PayneZA/MyModManager",
-    "DownloadLinkInstall": "https://github.com/PayneZA/MyModManager/releases/download/v2.0.0.0/latest.zip",
-    "DownloadLinkUpdate": "https://github.com/PayneZA/MyModManager/releases/download/v2.0.0.0/latest.zip",
-    "DownloadLinkTesting": "https://github.com/PayneZA/MyModManager/releases/download/v2.0.0.0/latest.zip",
-    "LastUpdate": 1790339697
+    "DownloadLinkInstall": "https://github.com/PayneZA/MyModManager/releases/download/v2.1.0.0/latest.zip",
+    "DownloadLinkUpdate": "https://github.com/PayneZA/MyModManager/releases/download/v2.1.0.0/latest.zip",
+    "DownloadLinkTesting": "https://github.com/PayneZA/MyModManager/releases/download/v2.1.0.0/latest.zip",
+    "LastUpdate": 1793216242
   }
 ]
