@@ -413,8 +413,6 @@ public sealed class PenumbraService : IDisposable
         return Available && states.TryGetValue(modDirectory, out state);
     }
 
-    public bool IsInstalled(string modDirectory) => modList.Count == 0 || modList.ContainsKey(modDirectory);
-
     public IReadOnlyList<OptionGroup>? GetOptionGroups(string modDirectory)
     {
         if (optionCache.TryGetValue(modDirectory, out var cached))

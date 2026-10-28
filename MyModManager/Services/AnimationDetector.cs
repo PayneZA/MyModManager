@@ -140,16 +140,4 @@ public static class AnimationDetector
 
     private static List<Detection> Order(List<Detection> list) =>
         list.OrderBy(d => d.Emote.Command, StringComparer.OrdinalIgnoreCase).ThenBy(d => d.Pose ?? -1).ToList();
-
-    /// <summary>A short label for one detection, e.g. "/groundsit · pose 2" or "Dom".</summary>
-    public static string Describe(Detection d)
-    {
-        var command = d.Pose switch
-        {
-            null => d.Emote.Command,
-            0 => $"{d.Emote.Command} · default pose",
-            var p => $"{d.Emote.Command} · pose {p}",
-        };
-        return d.Role.Length > 0 ? $"{d.Role} ({command})" : command;
-    }
 }

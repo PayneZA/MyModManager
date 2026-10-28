@@ -237,17 +237,6 @@ namespace MyModManager
                 .ToList();
         }
 
-        public void RememberTags(IEnumerable<string> tags)
-        {
-            foreach (var tag in tags)
-            {
-                var trimmed = tag.Trim();
-                if (trimmed.Length == 0) continue;
-                if (!KnownTags.Any(k => k.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
-                    KnownTags.Add(trimmed);
-            }
-        }
-
         /// <summary>
         /// Records a change. The file write is deferred briefly so bursts of edits (e.g. starring
         /// several entries) produce one write; <see cref="Flush"/> runs on unload.

@@ -87,11 +87,15 @@ public sealed partial class LibraryWindow : Window, IDisposable
 
     public override void PostDraw() => Theme.Pop();
 
-    /// <summary>Opens the Library on a tab with a rating filter, e.g. from "Unsorted".</summary>
+    /// <summary>Opens the Library filtered to unsorted entries, on a tab that has some (the current one first).</summary>
     public void ShowUnsorted()
     {
         IsOpen = true;
-        requestTypeId = Config.ModTypes.FirstOrDefault(t => t.Style == ModTypeStyle.Animation)?.Id ?? Config.ModTypes[0].Id;
+        var withUnsorted = Config.ModTypes
+            .Where(t => Config.ManagedMods.Any(m => m.ModTypeId == t.Id && m.Rating == ContentRating.Unrated))
+            .Select(t => t.Id)
+            .ToList();
+        requestTypeId = withUnsorted.Contains(activeTypeId) ? activeTypeId : withUnsorted.FirstOrDefault() ?? activeTypeId;
         rating = RatingFilter.Unsorted;
     }
 
@@ -147,9 +151,12 @@ public sealed partial class LibraryWindow : Window, IDisposable
         }
 
         var tempOn = plugin.Entries.CountTemporaryOn();
+        var paused = plugin.Entries.CountPaused();
         var unsorted = Config.SafeView ? 0 : Config.ManagedMods.Count(m => m.Rating == ContentRating.Unrated);
         var syncAvailable = plugin.Player.EmoteSyncAvailable;
-        var tempLabel = tempOn > 0 ? $"{tempOn} temporary on · Turn off###tempOff" : "Nothing temporary on###tempOff";
+        var tempLabel = tempOn > 0 ? $"{tempOn} temporary on · Turn off###tempOff"
+            : paused > 0 ? $"{paused} paused · Turn back on###tempOff"
+            : "Nothing temporary on###tempOff";
         var unsortedLabel = $"Unsorted {unsorted}###unsorted";
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var width = (syncAvailable ? Theme.ButtonWidth("Emote sync") + spacing : 0)
@@ -179,8 +186,8 @@ public sealed partial class LibraryWindow : Window, IDisposable
         Theme.Hint(Config.SafeView ? "Safe view is on: only SFW entries are shown anywhere." : "Hide everything not rated SFW, everywhere (for streaming or screen sharing).");
 
         ImGui.SameLine();
-        using (ImRaii.Disabled(tempOn == 0 && Config.SuspendedIds.Count == 0))
-        using (ImRaii.PushColor(ImGuiCol.Button, Theme.UnsortedBg).Push(ImGuiCol.Text, Theme.Unsorted, tempOn > 0))
+        using (ImRaii.Disabled(tempOn == 0 && paused == 0))
+        using (ImRaii.PushColor(ImGuiCol.Button, Theme.UnsortedBg).Push(ImGuiCol.Text, Theme.Unsorted, tempOn > 0 || paused > 0))
         {
             if (ImGui.Button(tempLabel))
                 plugin.Entries.TurnOffTemporary();
@@ -295,8 +302,6 @@ public sealed partial class LibraryWindow : Window, IDisposable
                     if (requestTypeId != type.Id)
                         selected.Clear();
                     categoryFilter = emoteFilter = positionFilter = string.Empty;
-                    if (rating == RatingFilter.Unsorted && type.Style != ModTypeStyle.Animation && requestTypeId == null)
-                        rating = RatingFilter.All;
                 }
             }
 
@@ -316,7 +321,10 @@ public sealed partial class LibraryWindow : Window, IDisposable
             }
         }
 
-        requestTypeId = null;
+        // ImGui switches to a requested tab a frame later, so keep asking until it's showing
+        // (clearing early would also drop the selection Reveal made).
+        if (requestTypeId == activeTypeId || Config.ModTypes.All(t => t.Id != requestTypeId))
+            requestTypeId = null;
         if (ImGui.TabItemButton("+###newType", ImGuiTabItemFlags.Trailing | ImGuiTabItemFlags.NoTooltip))
             OpenModTypeEditor(null);
         Theme.Hint("Add a mod type (a new tab), e.g. VFX or Outfits");
@@ -355,14 +363,12 @@ public sealed partial class LibraryWindow : Window, IDisposable
 
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("###search", $"Search {type.Name.ToLowerInvariant()}…", ref search, 128);
-        Theme.Hint("Every word must match: name, mod, command, category, position, folder or tag.");
+        Theme.Hint("Every word must match: name, mod, command, shortcut, category, position, folder or tag.");
 
         if (!Config.SafeView)
         {
             var ratingIndex = (int)rating;
-            var labels = isAnimation ? new[] { "All", "SFW", "NSFW", "Unsorted" } : new[] { "All", "SFW", "NSFW" };
-            if (!isAnimation && ratingIndex == 3) ratingIndex = 0;
-            if (Theme.Segmented("rating", labels, ref ratingIndex, [null, (Theme.Sfw, Theme.SfwBg), (Theme.Nsfw, Theme.NsfwBg), (Theme.Unsorted, Theme.UnsortedBg)]))
+            if (Theme.Segmented("rating", ["All", "SFW", "NSFW", "Unsorted"], ref ratingIndex, [null, (Theme.Sfw, Theme.SfwBg), (Theme.Nsfw, Theme.NsfwBg), (Theme.Unsorted, Theme.UnsortedBg)]))
                 rating = (RatingFilter)ratingIndex;
             ImGui.SameLine();
         }
@@ -496,13 +502,17 @@ public sealed partial class LibraryWindow : Window, IDisposable
             if (categoryFilter.Length > 0 && !m.Category.Equals(categoryFilter, StringComparison.OrdinalIgnoreCase)) return false;
             if (positionFilter.Length > 0 && !m.Position.Equals(positionFilter, StringComparison.OrdinalIgnoreCase)) return false;
             if (words.Length == 0) return true;
-            var haystack = $"{m.DisplayName} {m.ModName} {m.GroupName} {m.OptionName} {m.PickLink} {m.AnimationCommand} {m.Category} {m.Position} {FolderOf(m)} {string.Join(' ', m.Tags)}";
+            var haystack = $"{m.DisplayName} {m.ModName} {m.GroupName} {m.OptionName} {m.PickLink} {m.AnimationCommand} {m.ShortcutName} {m.Category} {m.Position} {FolderOf(m)} {string.Join(' ', m.Tags)}";
             return words.All(w => haystack.Contains(w, StringComparison.OrdinalIgnoreCase));
         }).ToList();
 
-        // Keep the selection to entries that are still visible.
-        var visibleIds = visibleEntries.Select(m => m.Id).ToHashSet();
-        selected.RemoveWhere(id => !visibleIds.Contains(id));
+        // Keep the selection to entries that are still visible, unless it was made for a tab
+        // that's about to open (Reveal).
+        if (requestTypeId == null)
+        {
+            var visibleIds = visibleEntries.Select(m => m.Id).ToHashSet();
+            selected.RemoveWhere(id => !visibleIds.Contains(id));
+        }
 
         var groupBy = type.Style == ModTypeStyle.Animation || Config.LibraryGroupBy is "folder" or "category" or "none"
             ? Config.LibraryGroupBy
@@ -751,6 +761,8 @@ public sealed partial class LibraryWindow : Window, IDisposable
         ImGui.SetCursorScreenPos(new Vector2(ImGui.GetItemRectMax().X + ImGui.GetStyle().ItemSpacing.X, start.Y));
 
         var isAnimation = type.Style == ModTypeStyle.Animation && mod.IsAnimation;
+        var missing = plugin.Entries.IsMissing(mod);
+        var canPlay = !missing && plugin.Penumbra.Available && !plugin.Player.IsBusy;
         var playWidth = isAnimation ? Theme.IconButtonSize(FontAwesomeIcon.Play).X + ImGui.GetStyle().ItemSpacing.X : 0;
         var selectWidth = Math.Max(Theme.Scaled(40), start.X + width - ImGui.GetCursorScreenPos().X - playWidth);
         var clicked = ImGui.Selectable("###row", false, ImGuiSelectableFlags.AllowDoubleClick, new Vector2(selectWidth, h));
@@ -760,13 +772,20 @@ public sealed partial class LibraryWindow : Window, IDisposable
         if (clicked)
         {
             if (isAnimation && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-                plugin.Player.Play(mod);
+            {
+                if (canPlay)
+                    plugin.Player.Play(mod);
+            }
             else
+            {
                 HandleRowClick(mod.Id);
+            }
         }
         if (hovered)
         {
-            var tip = ManagedModListUi.FormatPenumbraTooltip(mod).Replace("Right-click to copy.", string.Empty).TrimEnd();
+            var tip = ManagedModListUi.FormatPenumbraTooltip(mod);
+            if (mod.ShortcutName.Length > 0)
+                tip += $"\nShortcut: {mod.ShortcutName}";
             if (mod.AutoEmoteSync && isAnimation)
                 tip += "\nPurple arrows: auto emote sync (runs /heels emotesync after Play).";
             if (isAnimation)
@@ -799,7 +818,6 @@ public sealed partial class LibraryWindow : Window, IDisposable
             x += Theme.Scaled(18);
         }
 
-        var missing = plugin.Entries.IsMissing(mod);
         dl.PushClipRect(new Vector2(x, min.Y), new Vector2(Math.Max(x, right), max.Y), true);
         dl.AddText(new Vector2(x, textY), Theme.U32(missing ? Theme.Warning : Theme.Text), mod.DisplayName);
         dl.PopClipRect();
@@ -807,7 +825,7 @@ public sealed partial class LibraryWindow : Window, IDisposable
         if (isAnimation)
         {
             ImGui.SameLine();
-            using (ImRaii.Disabled(missing || !plugin.Penumbra.Available || plugin.Player.IsBusy))
+            using (ImRaii.Disabled(!canPlay))
             {
                 if (Theme.IconButton(FontAwesomeIcon.Play, "play", $"Turn on and play {Theme.CommandLabel(mod, true)}", subtle: !rowHovered && !isSelected))
                     plugin.Player.Play(mod);

@@ -198,6 +198,9 @@ public sealed class EntryService
                 continue;
             if (playing.PoseNumber is { } a && rival.PoseNumber is { } b && a != b)
                 continue;
+            // Turning off a whole-mod entry of the same mod would switch off the one being played.
+            if (rival.OptionName.Length == 0 && rival.ModName.Equals(playing.ModName, StringComparison.OrdinalIgnoreCase))
+                continue;
             // Penumbra already swaps options within one single-choice group.
             if (rival.ModName == playing.ModName && rival.GroupName == playing.GroupName && rival.GroupType == GroupType.Single
                 && !string.IsNullOrEmpty(rival.OptionName))
@@ -226,6 +229,12 @@ public sealed class EntryService
 
         if (temps.Count == 0 && restore.Count == 0)
         {
+            // Leftover ids belong to removed entries, or ones since marked temporary.
+            if (config.SuspendedIds.Count > 0)
+            {
+                config.SuspendedIds.Clear();
+                config.Save();
+            }
             Svc.Print("Nothing temporary is on.");
             return;
         }
@@ -248,6 +257,9 @@ public sealed class EntryService
     }
 
     public int CountTemporaryOn() => config.ManagedMods.Count(m => m.IsTemp && IsOn(m) == true);
+
+    /// <summary>Kept-on entries still off because a temporary one paused them.</summary>
+    public int CountPaused() => config.ManagedMods.Count(m => !m.IsTemp && config.SuspendedIds.Contains(m.Id) && IsOn(m) != true);
 
     private static string Plural(int count, string one, string many) => $"{count} {(count == 1 ? one : many)}";
 }

@@ -79,8 +79,19 @@ public sealed class AddWindow : Window, IDisposable
     private bool openCommandPopup;
     private (float Check, float Label, float Plays, float Try, float Name) columns;
 
-    /// <summary>What "Try" turned on, and the mod's settings before, so Undo can restore them exactly.</summary>
-    private sealed record TrySession(string Dir, string Label, string Group, GroupType Type, ModState? Before);
+    /// <summary>
+    /// What "Try" changed in one mod (its enabled state, the option groups tried, entries paused
+    /// for it) and the mod's settings before, so Undo can put everything back exactly.
+    /// </summary>
+    private sealed class TrySession(string dir, ModState? before)
+    {
+        public string Dir { get; } = dir;
+        public ModState? Before { get; } = before;
+        public string Label { get; set; } = string.Empty;
+        public Dictionary<string, GroupType> Groups { get; } = new(StringComparer.Ordinal);
+        public List<ManagedMod> Paused { get; } = new();
+    }
+
     private TrySession? trying;
 
     private const string ModSection = "\u0001mod";
@@ -776,10 +787,10 @@ public sealed class AddWindow : Window, IDisposable
         if (selectedDir == null)
             return;
 
-        // Keep the original "before" when trying several rows of the same mod in a row.
-        var before = trying?.Dir == selectedDir ? trying.Before : plugin.Penumbra.ReadSettings(selectedDir);
+        // Trying several rows of the same mod keeps one session, so Undo goes back to the original.
         if (trying != null && trying.Dir != selectedDir)
             UndoTry();
+        trying ??= new TrySession(selectedDir, plugin.Penumbra.ReadSettings(selectedDir));
 
         var temp = new ManagedMod
         {
@@ -794,10 +805,12 @@ public sealed class AddWindow : Window, IDisposable
             IsTemp = true,
             AutoEmoteSync = autoSync && c.Command.Trim().Length > 0,
         };
-        trying = new TrySession(selectedDir, temp.DisplayName, c.Group, c.Type, before);
+        trying.Label = temp.DisplayName;
+        if (c.Group.Length > 0)
+            trying.Groups[c.Group] = c.Type;
 
         if (temp.IsAnimation)
-            plugin.Player.Play(temp);
+            trying.Paused.AddRange(plugin.Player.Play(temp));
         else
             plugin.Entries.Apply([temp], true);
     }
@@ -817,15 +830,23 @@ public sealed class AddWindow : Window, IDisposable
         }
         else
         {
-            if (session.Group.Length > 0)
+            foreach (var (group, type) in session.Groups)
             {
-                var previous = before.Settings.TryGetValue(session.Group, out var list) ? list : new List<string>();
-                if (session.Type == GroupType.Multi)
-                    penumbra.SetMultiOptions(session.Dir, session.Group, previous);
+                var previous = before.Settings.TryGetValue(group, out var list) ? list : new List<string>();
+                if (type == GroupType.Multi)
+                    penumbra.SetMultiOptions(session.Dir, group, previous);
                 else if (previous.Count > 0)
-                    penumbra.SetSingleOption(session.Dir, session.Group, previous[0]);
+                    penumbra.SetSingleOption(session.Dir, group, previous[0]);
             }
             penumbra.SetModEnabled(session.Dir, before.Enabled);
+        }
+
+        // Entries paused so the try could play come back too.
+        if (session.Paused.Count > 0)
+        {
+            plugin.Entries.Apply(session.Paused, true, redraw: false);
+            Config.SuspendedIds.RemoveAll(id => session.Paused.Any(p => p.Id == id));
+            Config.Save();
         }
 
         if (Config.RedrawAfterChange)

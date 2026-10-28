@@ -162,9 +162,8 @@ public sealed partial class LibraryWindow
 
                 FieldRow("Name", () =>
                 {
-                    var name = mod.DisplayName;
-                    ImGui.SetNextItemWidth(Theme.Scaled(360));
-                    if (ImGui.InputText("###displayName", ref name, 120) && name.Trim().Length > 0)
+                    // Commits on Enter or click-away, so the list doesn't re-sort (or filter the entry out) mid-word.
+                    if (DraftInput($"displayName{mod.Id}", mod.DisplayName, Theme.Scaled(360), out var name))
                         SetAll([mod], m => m.DisplayName = name);
                 });
                 FieldRow("Rating", () => RatingField([mod]));
@@ -177,6 +176,7 @@ public sealed partial class LibraryWindow
                 FieldRow("Mod type", () => ModTypeCombo([mod]));
                 FieldRow("Folder", () => FolderField([mod]));
                 FieldRow("Tags", () => TagsField(mod));
+                FieldRow("Shortcut", () => ShortcutField(mod));
             }
         }
 
@@ -463,6 +463,33 @@ public sealed partial class LibraryWindow
         Theme.Hint("Type a tag and press Enter.");
     }
 
+    /// <summary>
+    /// A name for chat commands and macros (/mmm play, on, off, toggle). Entries sharing a
+    /// shortcut switch on and off together, so the others are listed.
+    /// </summary>
+    private void ShortcutField(ManagedMod mod)
+    {
+        if (DraftInput($"shortcut{mod.Id}", mod.ShortcutName, Theme.Scaled(200), out var shortcut, allowEmpty: true))
+            SetAll([mod], m => m.ShortcutName = shortcut);
+        Theme.Hint("For chat and macros: /mmm play, /mmm on, /mmm off and /mmm toggle followed by this name.\nEntries with the same shortcut switch on and off together.");
+
+        ImGui.SameLine();
+        ImGui.AlignTextToFramePadding();
+        if (mod.ShortcutName.Length == 0)
+        {
+            ImGui.TextDisabled("Optional, for macros");
+            return;
+        }
+
+        ImGui.TextColored(Theme.Gold, $"/mmm play {mod.ShortcutName}");
+        var others = plugin.Entries.ResolveShortcutGroup(mod).Where(m => m != mod).ToList();
+        if (others.Count == 0)
+            return;
+        ImGui.SameLine();
+        ImGui.TextDisabled($"· switches with {others.Count} other{(others.Count == 1 ? string.Empty : "s")}");
+        Theme.Hint(string.Join("\n", others.Select(m => m.DisplayName)));
+    }
+
     private void DrawRemoveButton(List<ManagedMod> mods)
     {
         var label = mods.Count == 1 ? "Remove" : $"Remove {mods.Count}";
@@ -473,7 +500,10 @@ public sealed partial class LibraryWindow
             if (ImGui.Button(label))
             {
                 foreach (var m in mods)
+                {
                     Config.ManagedMods.Remove(m);
+                    Config.SuspendedIds.Remove(m.Id);
+                }
                 selected.Clear();
                 Config.Save();
                 status.Set(mods.Count == 1 ? $"Removed {mods[0].DisplayName}." : $"Removed {mods.Count} entries.");
@@ -581,10 +611,10 @@ public sealed partial class LibraryWindow
                 ImGui.AlignTextToFramePadding();
                 Theme.Label(editingLabels ? "Options" : "Selected option");
                 ImGui.SameLine();
-                Theme.RightAlign(Theme.ButtonWidth(editingLabels ? "Done" : "Edit labels"));
-                if (Theme.Chip(editingLabels ? "Done###editLabels" : "Edit labels###editLabels", editingLabels))
+                Theme.RightAlign(Theme.ButtonWidth(editingLabels ? "Done" : "Edit options"));
+                if (Theme.Chip(editingLabels ? "Done###editLabels" : "Edit options###editLabels", editingLabels))
                     editingLabels = !editingLabels;
-                Theme.Hint("Rename, reorder or hide the options. Penumbra keeps its own names.");
+                Theme.Hint("Rename, reorder or hide the options, or give them shortcuts for macros. Penumbra keeps its own names.");
 
                 if (editingLabels)
                     DrawOptionEditor(mods, choices);
@@ -628,11 +658,14 @@ public sealed partial class LibraryWindow
     /// A text field that commits on Enter or when it loses focus, so names can be typed freely
     /// (the shown value is trimmed and re-derived from the entries every frame).
     /// </summary>
-    private bool DraftInput(string key, string current, float width, out string committed)
+    private bool DraftInput(string key, string current, float width, out string committed, bool allowEmpty = false, string? hint = null)
     {
         var value = draftKey == key ? draft : current;
         ImGui.SetNextItemWidth(width);
-        ImGui.InputText($"###{key}", ref value, 80);
+        if (hint != null)
+            ImGui.InputTextWithHint($"###{key}", hint, ref value, 120);
+        else
+            ImGui.InputText($"###{key}", ref value, 120);
         if (ImGui.IsItemActive())
         {
             draftKey = key;
@@ -642,7 +675,7 @@ public sealed partial class LibraryWindow
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
             draftKey = null;
-            return committed.Length > 0 && committed != current;
+            return (allowEmpty || committed.Length > 0) && committed != current;
         }
         if (draftKey == key && !ImGui.IsItemActive())
             draftKey = null;
@@ -654,7 +687,7 @@ public sealed partial class LibraryWindow
 
     private void PickNameField(List<ManagedMod> mods, bool linked)
     {
-        if (!DraftInput("pickName", PickName(mods), -1, out var name))
+        if (!DraftInput($"pickName{mods[0].Id}", PickName(mods), -1, out var name))
             return;
         name = CleanPickText(name);
         if (linked)
@@ -669,7 +702,7 @@ public sealed partial class LibraryWindow
         target.DisplayName = $"{prefix} - {CleanPickText(label)}";
     }
 
-    /// <summary>One row per option: label, Penumbra's name, move up/down, hide.</summary>
+    /// <summary>One row per option: label, shortcut, Penumbra's name, move up/down, hide.</summary>
     private void DrawOptionEditor(List<ManagedMod> mods, List<(string Label, List<ManagedMod> Targets)> choices)
     {
         var buttons = Theme.IconButtonSize(FontAwesomeIcon.Eye).X * 4 + ImGui.GetStyle().ItemSpacing.X * 3;
@@ -686,6 +719,16 @@ public sealed partial class LibraryWindow
                     SetOptionLabel(t, mods, newLabel);
                 Config.Save();
             }
+            ImGui.SameLine();
+
+            // A linked option's shortcut covers every group it sets.
+            var shortcut = Same(targets, m => m.ShortcutName);
+            if (DraftInput($"shortcut{targets[0].Id}", shortcut ?? string.Empty, Theme.Scaled(110), out var newShortcut, allowEmpty: true,
+                    hint: shortcut == null ? "(mixed)" : "shortcut"))
+                SetAll(targets, m => m.ShortcutName = newShortcut);
+            Theme.Hint(shortcut is { Length: > 0 }
+                ? $"For chat and macros: /mmm play {shortcut}, /mmm on {shortcut}…"
+                : "Optional name for chat and macros, e.g. /mmm on nude.");
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(hidden ? Theme.Faint : Theme.Dim, hidden ? $"← {original} · hidden" : $"← {original}");

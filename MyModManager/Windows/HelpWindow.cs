@@ -242,7 +242,7 @@ public sealed class HelpWindow : Window, IDisposable
         [
             T("The Library works like Penumbra's Mods tab: a list on the left, the selected entry on the right."),
             H("Finding things"),
-            B("Search matches every word you type against the name, mod, command, category, position, folder and tags. \"ground riding\" finds ground-sit entries in the Riding position.",
+            B("Search matches every word you type against the name, mod, command, shortcut, category, position, folder and tags. \"ground riding\" finds ground-sit entries in the Riding position.",
               "All / SFW / NSFW / Unsorted filter by rating. ★ shows favourites only, On shows what is on right now.",
               "The emote, category and position drop-downs narrow it further.",
               "Group changes how the list is sorted into headers: by Folder (your Penumbra folders unless you set one), by Emote (e.g. every /groundsit pose 2 together), by Category, by Position, or not at all. Click a header to fold it."),
@@ -252,6 +252,7 @@ public sealed class HelpWindow : Window, IDisposable
             B("Click a row to open it on the right. Click it again to close it.",
               "Ctrl-click to pick several; Shift-click to pick a range. With several selected, the right side edits them all at once (rating, category, position, keep, favourite, emote sync, tab, folder).",
               "The tick box on a row turns the entry on or off in Penumbra. Double-click an animation row to play it.",
+              "Shortcut gives an entry a short name for chat commands and macros, e.g. /mmm play riding. Entries that share a shortcut switch on and off together; the field says how many others it switches.",
               "Remove needs Ctrl held, like in Penumbra. Removing only takes the entry out of My Mod Manager; the mod stays installed."),
             H("With nothing selected"),
             T("The right side lists what is on right now in the current tab, each with Turn off, and how many entries still need sorting."),
@@ -289,7 +290,7 @@ public sealed class HelpWindow : Window, IDisposable
             Rows(("Add", "Tick what you want."),
                  ("In Penumbra", "The mod or option, as Penumbra names it."),
                  ("Plays", "The command and pose it was found to use. Click it to change either."),
-                 ("Try", "Turns it on and plays it, without adding it. An amber bar offers Undo try, which puts the mod's Penumbra settings back exactly. Closing the window undoes it too."),
+                 ("Try", "Turns it on and plays it, without adding it. An amber bar offers Undo try, which puts the mod's Penumbra settings back exactly and turns back on anything paused for it. Closing the window undoes it too."),
                  ("Name in your library", "What the entry will be called. Click to edit.")),
             H("How detection works"),
             T("My Mod Manager reads the mod's own files to see which animation files it replaces, and maps them to the exact emote and pose using the game's data. When a mod has no readable files it falls back to the name ([Gsit1_2], Csit2, (Gdance)). Everything it finds can be changed before you add."),
@@ -349,6 +350,7 @@ public sealed class HelpWindow : Window, IDisposable
                  ("/mmm off <shortcut>", "Turn them off."),
                  ("/mmm toggle <shortcut>", "Flip them, based on what's on in Penumbra right now."),
                  ("/mmm temp off", "Same as Turn off temporary.")),
+            T("Set an entry's shortcut in the Library: select it and fill in its Shortcut field. For a pick-one switch, select it and press Edit options; each option has a shortcut box. Give several entries the same shortcut to switch them together."),
         ]),
 
         new(HelpTopic.Settings, "Settings",

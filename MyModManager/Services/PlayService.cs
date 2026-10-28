@@ -72,36 +72,35 @@ public sealed class PlayService : IDisposable
         Send(EmoteSyncCommand, null);
     }
 
-    public void Play(ManagedMod mod)
+    /// <summary>Plays an entry. Returns the entries paused so it could play.</summary>
+    public IReadOnlyList<ManagedMod> Play(ManagedMod mod)
     {
         var changed = false;
         if (entries.IsOn(mod) != true)
         {
             var report = entries.Apply(entries.ResolveShortcutGroup(mod), true, redraw: false);
             if (!report.AnyChanged)
-                return;
+                return [];
             changed = true;
         }
 
-        if (config.OneAnimationPerEmote)
+        var paused = config.OneAnimationPerEmote ? entries.PauseRivals(mod) : [];
+        if (paused.Count > 0)
         {
-            var paused = entries.PauseRivals(mod);
-            if (paused.Count > 0)
-            {
-                changed = true;
-                Svc.Print($"Paused {string.Join(", ", paused.Select(p => p.DisplayName))} so {mod.DisplayName} plays. "
-                          + "Turn off temporary brings kept-on entries back.");
-            }
+            changed = true;
+            Svc.Print($"Paused {string.Join(", ", paused.Select(p => p.DisplayName))} so {mod.DisplayName} plays. "
+                      + "Turn off temporary brings kept-on entries back.");
         }
 
         if (changed && config.RedrawAfterChange)
         {
             pending = new PendingPlay(mod, DateTime.UtcNow + RedrawTimeout);
             penumbra.RedrawPlayer();
-            return;
+            return paused;
         }
 
         Perform(mod);
+        return paused;
     }
 
     private void OnPlayerRedrawn()
